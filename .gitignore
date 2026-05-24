@@ -2,9 +2,14 @@ __pycache__/
 *.pyc
 .env
 .env.*
+!.env.example
 postgres_data/
 storage/
 .vscode/
 .idea/
 *.log
 
+celerybeat-schedule
+backend/celerybeat-schedule
+frontend/dist/
+frontend/node_modules/

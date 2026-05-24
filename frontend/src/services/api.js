@@ -1,0 +1,52 @@
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
+
+async function request(path, options = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+
+  if (!response.ok) {
+    let detail = `Erro ${response.status}`;
+    try {
+      const body = await response.json();
+      detail = body.detail || detail;
+    } catch {
+      detail = response.statusText || detail;
+    }
+    throw new Error(Array.isArray(detail) ? detail.map((item) => item.msg).join(', ') : detail);
+  }
+
+  if (response.status === 204) {
+    return null;
+  }
+
+  return response.json();
+}
+
+const json = (method, path, payload) => request(path, {
+  method,
+  body: payload === undefined ? undefined : JSON.stringify(payload),
+});
+
+export const api = {
+  listCarrosseis: () => request('/carrosseis'),
+  getCarrossel: (id) => request(`/carrosseis/${id}`),
+  createCarrossel: (payload) => json('POST', '/carrosseis', payload),
+  updateCarrossel: (id, payload) => json('PUT', `/carrosseis/${id}`, payload),
+  deleteCarrossel: (id) => request(`/carrosseis/${id}`, { method: 'DELETE' }),
+  generate: (id) => json('POST', `/carrosseis/${id}/gerar`),
+  regenerate: (id) => json('POST', `/carrosseis/${id}/regenerar`),
+  updateSlide: (id, payload) => json('PUT', `/slides/${id}`, payload),
+  approve: (id) => json('POST', `/carrosseis/${id}/aprovar`),
+  reject: (id) => json('POST', `/carrosseis/${id}/rejeitar`),
+  schedule: (id, payload) => json('POST', `/carrosseis/${id}/agendar`, payload),
+  reschedule: (id, payload) => json('PUT', `/publicacoes/${id}/reagendar`, payload),
+  cancelPublication: (id) => json('POST', `/publicacoes/${id}/cancelar`),
+  publishNow: (id) => json('POST', `/carrosseis/${id}/publicar-agora`),
+  listPublicacoes: () => request('/publicacoes'),
+  listLogs: () => request('/logs'),
+};
