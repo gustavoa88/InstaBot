@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -24,6 +24,7 @@ from app.schemas.carrossel import (
     LogExecucaoRead,
     PublicacaoRead,
     ReagendamentoUpdate,
+    RenderizacaoCreate,
     SlideRead,
     SlideUpdate,
 )
@@ -151,13 +152,24 @@ def regenerar_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/carrosseis/{carrossel_id}/renderizar", response_model=CarrosselRead)
-def renderizar_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
+def renderizar_carrossel(
+    carrossel_id: int,
+    payload: RenderizacaoCreate | None = Body(default=None),
+    db: Session = Depends(get_db),
+):
     carrossel = buscar_carrossel(db, carrossel_id)
     if not carrossel.slides:
         raise HTTPException(status_code=409, detail="Não é possível renderizar sem slides gerados.")
     if len(carrossel.slides) > 20:
         raise HTTPException(status_code=409, detail="Não é possível renderizar mais de 20 slides.")
-    renderizar_carrossel_slides(db, carrossel)
+    opcoes = payload or RenderizacaoCreate()
+    renderizar_carrossel_slides(
+        db,
+        carrossel,
+        template=opcoes.template,
+        brand_name=opcoes.brand_name,
+        primary_color=opcoes.primary_color,
+    )
     db.commit()
     db.refresh(carrossel)
     return buscar_carrossel(db, carrossel.id)

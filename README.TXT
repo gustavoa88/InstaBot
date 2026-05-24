@@ -589,7 +589,20 @@ POST /carrosseis/{id}/regenerar
 ```http
 GET /carrosseis/{id}/slides
 PUT /slides/{slide_id}
+POST /carrosseis/{id}/renderizar
 ```
+
+O endpoint de renderização aceita payload opcional:
+
+```json
+{
+  "template": "clean_editorial",
+  "brand_name": "InstaBot",
+  "primary_color": "#6f9684"
+}
+```
+
+Templates iniciais: `clean_editorial`, `bold_contrast` e `soft_brand`. Sem payload, o renderizador mantém compatibilidade usando `mvp_deterministic_v1`.
 
 ---
 
@@ -670,6 +683,7 @@ content-carousel-platform/
 
 ```env
 APP_ENV=development
+APP_BIND_HOST=127.0.0.1
 DATABASE_URL=postgresql://user:password@postgres:5432/contentdb
 REDIS_URL=redis://redis:6379/0
 
@@ -683,6 +697,7 @@ FACEBOOK_PAGE_ID=
 STORAGE_PATH=/app/storage
 PUBLIC_BASE_URL=
 
+# Para acessar de outro dispositivo na mesma rede, use APP_BIND_HOST=0.0.0.0 no .env.
 MEDIA_RETENTION_DAYS=30
 ```
 
@@ -717,7 +732,7 @@ MEDIA_RETENTION_DAYS=30
 * Multiusuário
 * Multiempresa
 * MultiInstagram
-* Biblioteca de templates
+* Templates visuais avançados
 * Versionamento visual de slides
 * Integração LinkedIn
 * Integração YouTube Shorts

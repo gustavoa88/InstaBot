@@ -5,7 +5,31 @@ function toDatetimeLocalValue(date = new Date()) {
   return local.toISOString().slice(0, 16);
 }
 
-export function ActionPanel({ selected, scheduleForm, rescheduleForms, onScheduleForm, onRescheduleForm, onGenerate, onRegenerate, onRenderSlides, onApprove, onReject, onSchedule, onReschedule, onCancelPublication, onPublishNow, loading }) {
+const TEMPLATE_OPTIONS = [
+  { value: 'clean_editorial', label: 'Clean editorial' },
+  { value: 'bold_contrast', label: 'Bold contrast' },
+  { value: 'soft_brand', label: 'Soft brand' },
+];
+
+export function ActionPanel({
+  selected,
+  scheduleForm,
+  rescheduleForms,
+  renderForm,
+  onScheduleForm,
+  onRescheduleForm,
+  onRenderForm,
+  onGenerate,
+  onRegenerate,
+  onRenderSlides,
+  onApprove,
+  onReject,
+  onSchedule,
+  onReschedule,
+  onCancelPublication,
+  onPublishNow,
+  loading,
+}) {
   if (!selected) {
     return (
       <aside className="panel rounded-md p-4">
@@ -20,6 +44,7 @@ export function ActionPanel({ selected, scheduleForm, rescheduleForms, onSchedul
   const canApprove = selected.slides?.length && selected.status !== 'PUBLICADO';
   const canSchedule = selected.status === 'APROVADO';
   const canPublish = ['APROVADO', 'AGENDADO'].includes(selected.status);
+  const normalizedColor = /^#[0-9A-Fa-f]{6}$/.test(renderForm.primary_color) ? renderForm.primary_color : '#6f9684';
 
   return (
     <aside className="panel rounded-md p-4">
@@ -34,10 +59,56 @@ export function ActionPanel({ selected, scheduleForm, rescheduleForms, onSchedul
           <RefreshCw className="h-4 w-4" />
           Regenerar
         </button>
-        <button className="secondary-button justify-start" onClick={onRenderSlides} disabled={loading || !canRender}>
+      </div>
+
+      <div className="mt-4 rounded-md border border-line bg-white p-3">
+        <h3 className="text-sm font-semibold text-ink">Visual dos slides</h3>
+        <label className="mt-3 block">
+          <span className="field-label">Template</span>
+          <select
+            className="input mt-1"
+            value={renderForm.template}
+            onChange={(event) => onRenderForm({ ...renderForm, template: event.target.value })}
+          >
+            {TEMPLATE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="mt-3 block">
+          <span className="field-label">Marca/assinatura</span>
+          <input
+            className="input mt-1"
+            value={renderForm.brand_name}
+            maxLength={80}
+            placeholder={selected.tema || 'Content Carousel'}
+            onChange={(event) => onRenderForm({ ...renderForm, brand_name: event.target.value })}
+          />
+        </label>
+        <label className="mt-3 block">
+          <span className="field-label">Cor principal</span>
+          <div className="mt-1 flex items-center gap-2">
+            <input
+              className="h-10 w-12 rounded-md border border-line bg-white p-1"
+              type="color"
+              value={normalizedColor}
+              onChange={(event) => onRenderForm({ ...renderForm, primary_color: event.target.value })}
+            />
+            <input
+              className="input"
+              value={renderForm.primary_color}
+              maxLength={7}
+              onChange={(event) => onRenderForm({ ...renderForm, primary_color: event.target.value })}
+            />
+          </div>
+        </label>
+        <button className="secondary-button mt-3 w-full justify-start" onClick={onRenderSlides} disabled={loading || !canRender}>
           <Image className="h-4 w-4" />
           Renderizar slides
         </button>
+      </div>
+
+      <div className="mt-3 grid gap-2">
         <button className="primary-button justify-start" onClick={onApprove} disabled={loading || !canApprove}>
           <CheckCircle2 className="h-4 w-4" />
           Aprovar

@@ -28,7 +28,7 @@ services:
     env_file:
       - .env
     ports:
-      - "127.0.0.1:8000:8000"
+      - "${APP_BIND_HOST:-127.0.0.1}:8000:8000"
     volumes:
       - ./backend:/app
       - ./storage:/app/storage
@@ -73,7 +73,7 @@ services:
       VITE_API_PROXY_TARGET: http://backend:8000
       VITE_ADMIN_TOKEN: ${ADMIN_API_TOKEN:-dev-admin-token}
     ports:
-      - "127.0.0.1:5173:5173"
+      - "${APP_BIND_HOST:-127.0.0.1}:5173:5173"
     volumes:
       - ./frontend:/app
       - /app/node_modules

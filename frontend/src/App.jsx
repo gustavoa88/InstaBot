@@ -14,6 +14,12 @@ const EMPTY_FORM = {
   observacoes_adicionais: '',
 };
 
+const DEFAULT_RENDER_FORM = {
+  template: 'clean_editorial',
+  brand_name: '',
+  primary_color: '#6f9684',
+};
+
 function toIsoFromLocal(value) {
   return new Date(value).toISOString();
 }
@@ -54,6 +60,7 @@ export default function App() {
   const [draft, setDraft] = useState({});
   const [slideDrafts, setSlideDrafts] = useState({});
   const [scheduleForm, setScheduleForm] = useState({ agendado_para: toLocalDateInput(), plataforma: 'instagram' });
+  const [renderForm, setRenderForm] = useState(DEFAULT_RENDER_FORM);
   const [rescheduleForms, setRescheduleForms] = useState({});
   const [statusFilter, setStatusFilter] = useState('TODOS');
   const [search, setSearch] = useState('');
@@ -163,6 +170,12 @@ export default function App() {
     await loadData(selected.id);
   }, message).catch(() => {});
 
+  const renderSlides = () => simpleAction((id) => api.renderSlides(id, {
+    template: renderForm.template || null,
+    brand_name: renderForm.brand_name || null,
+    primary_color: renderForm.primary_color || null,
+  }), 'Slides renderizados.');
+
   const schedule = () => run(async () => {
     await api.schedule(selected.id, {
       agendado_para: toIsoFromLocal(scheduleForm.agendado_para),
@@ -248,11 +261,13 @@ export default function App() {
             selected={selected}
             scheduleForm={scheduleForm}
             rescheduleForms={rescheduleForms}
+            renderForm={renderForm}
             onScheduleForm={setScheduleForm}
             onRescheduleForm={(publicationId, next) => setRescheduleForms((current) => ({ ...current, [publicationId]: next }))}
+            onRenderForm={setRenderForm}
             onGenerate={() => simpleAction(api.generate, 'Slides gerados.')}
             onRegenerate={regenerateCarrossel}
-            onRenderSlides={() => simpleAction(api.renderSlides, 'Slides renderizados.')}
+            onRenderSlides={renderSlides}
             onApprove={() => simpleAction(api.approve, 'Carrossel aprovado.')}
             onReject={() => simpleAction(api.reject, 'Carrossel rejeitado.')}
             onSchedule={schedule}

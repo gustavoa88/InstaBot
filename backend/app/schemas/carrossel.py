@@ -37,6 +37,12 @@ class SlideUpdate(BaseModel):
     aprovado: bool | None = None
 
 
+class RenderizacaoCreate(BaseModel):
+    template: str | None = Field(default=None, max_length=50)
+    brand_name: str | None = Field(default=None, max_length=80)
+    primary_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+
+
 class AgendamentoCreate(BaseModel):
     agendado_para: datetime
     plataforma: str = Field(default="instagram", max_length=50)
