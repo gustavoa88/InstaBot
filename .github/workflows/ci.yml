@@ -34,6 +34,11 @@ jobs:
         working-directory: backend
         run: python -m compileall app alembic
 
+      - name: Run backend tests
+        env:
+          ADMIN_API_TOKEN: test-admin-token
+        run: PYTHONPATH=backend pytest backend/tests
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest

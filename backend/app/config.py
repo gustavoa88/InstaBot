@@ -6,6 +6,7 @@ load_dotenv()
 
 
 APP_ENV = os.getenv("APP_ENV", "development")
+ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN", "dev-admin-token")
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://contentuser:contentpass@postgres:5432/contentdb",

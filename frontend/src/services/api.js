@@ -1,11 +1,15 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
+const ADMIN_TOKEN = import.meta.env.VITE_ADMIN_TOKEN || localStorage.getItem('ccp_admin_token') || '';
 
 async function request(path, options = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(ADMIN_TOKEN ? { 'X-Admin-Token': ADMIN_TOKEN } : {}),
+    ...(options.headers || {}),
+  };
+
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
+    headers,
     ...options,
   });
 

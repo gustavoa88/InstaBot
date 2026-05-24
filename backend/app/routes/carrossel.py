@@ -30,9 +30,10 @@ from app.schemas.carrossel import (
 from app.services.generation_service import gerar_carrossel_textual
 from app.services.log_service import registrar_log
 from app.services.publication_service import publicar_mockado
+from app.security import require_admin_token
 from app.services.render_service import renderizar_carrossel_slides
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin_token)])
 
 
 def buscar_carrossel(db: Session, carrossel_id: int) -> Carrossel:
@@ -154,6 +155,8 @@ def renderizar_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
     carrossel = buscar_carrossel(db, carrossel_id)
     if not carrossel.slides:
         raise HTTPException(status_code=409, detail="Não é possível renderizar sem slides gerados.")
+    if len(carrossel.slides) > 20:
+        raise HTTPException(status_code=409, detail="Não é possível renderizar mais de 20 slides.")
     renderizar_carrossel_slides(db, carrossel)
     db.commit()
     db.refresh(carrossel)

@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
-from app.config import STORAGE_PATH
+from app.config import APP_ENV, STORAGE_PATH
 from app.database import engine
 from app.routes.carrossel import router as carrossel_router
 
@@ -35,8 +35,8 @@ def db_health():
             "database": "connected"
         }
 
-    except Exception as e:
-        return {
-            "database": "error",
-            "detail": str(e)
-        }
+    except Exception as exc:
+        response = {"database": "error"}
+        if APP_ENV == "development":
+            response["detail"] = exc.__class__.__name__
+        return response
