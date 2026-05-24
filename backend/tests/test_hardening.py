@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -8,7 +9,8 @@ from pydantic import ValidationError
 
 from app.schemas.carrossel import CarrosselCreate, RenderizacaoCreate, SlideUpdate
 from app.security import require_admin_token
-from app.services import image_asset_service, media_cleanup_service, render_service
+from app.models.carrossel import CarrosselSlide, STATUS_AGUARDANDO_APROVACAO
+from app.services import ai_service, image_asset_service, media_cleanup_service, render_service
 
 
 class FakeDb:
@@ -150,3 +152,81 @@ def test_render_service_supports_visual_templates(tmp_path, monkeypatch, templat
     assert slide.layout_config["template"] == template
     with Image.open(tmp_path / slide.imagem_path) as image:
         assert image.size == (1080, 1350)
+
+
+def test_openai_generation_creates_slides_and_updates_status(monkeypatch):
+    payload = {
+        "titulo": "Titulo refinado",
+        "tema": "Produtividade",
+        "publico_alvo": "Criadores independentes",
+        "slides": [
+            {
+                "numero_slide": 2,
+                "titulo": "Segundo passo",
+                "texto_principal": "Organize o fluxo antes de automatizar.",
+                "texto_secundario": None,
+                "observacao_visual": "Mesa de trabalho limpa com elementos editoriais.",
+            },
+            {
+                "numero_slide": 1,
+                "titulo": "Comece simples",
+                "texto_principal": "Automacao boa nasce de um processo claro.",
+                "texto_secundario": "Menos atrito, mais consistencia.",
+                "observacao_visual": "Abertura forte com contraste e espaco para titulo.",
+            },
+        ],
+        "legenda": "Legenda pronta para revisao.",
+        "hashtags": ["produtividade", "#conteudo digital", ""],
+        "cta_final": "Salve para revisar depois.",
+    }
+    calls = {}
+
+    class FakeResponses:
+        def create(self, **kwargs):
+            calls.update(kwargs)
+            return SimpleNamespace(
+                id="resp_123",
+                output_text=json.dumps(payload),
+                usage={"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
+            )
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            calls["api_key"] = api_key
+            self.responses = FakeResponses()
+
+    carrossel = SimpleNamespace(
+        id=77,
+        titulo="Titulo inicial",
+        ideia_original="Ideia original para o carrossel",
+        tema="Tema inicial",
+        tom="pratico",
+        publico_alvo="Profissionais solo",
+        prompt_config={"observacoes_adicionais": "Use exemplos concretos."},
+        quantidade_slides=2,
+        slides=[],
+        status="RASCUNHO",
+        legenda=None,
+        hashtags=None,
+        ia_resultado=None,
+    )
+    db = FakeDb()
+
+    monkeypatch.setattr(ai_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(ai_service, "OPENAI_MODEL", "gpt-test")
+    monkeypatch.setattr(ai_service, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(ai_service, "_verificar_limites", lambda *_args, **_kwargs: None)
+
+    result = ai_service.gerar_carrossel_com_openai(db, carrossel)
+
+    slides = [item for item in db.added if isinstance(item, CarrosselSlide)]
+    assert calls["api_key"] == "test-key"
+    assert calls["model"] == "gpt-test"
+    assert calls["text"]["format"]["type"] == "json_schema"
+    assert calls["text"]["format"]["schema"] == ai_service.CARROSSEL_RESPONSE_SCHEMA
+    assert [slide.numero_slide for slide in slides] == [1, 2]
+    assert result.status == STATUS_AGUARDANDO_APROVACAO
+    assert result.ia_resultado["mock"] is False
+    assert result.ia_resultado["provider"] == "openai"
+    assert result.ia_resultado["usage"] == {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30}
+    assert result.hashtags == ["#produtividade", "#conteudodigital"]

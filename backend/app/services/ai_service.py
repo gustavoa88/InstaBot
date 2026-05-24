@@ -238,6 +238,38 @@ def _usage_to_dict(response: Any) -> dict[str, int | None]:
     }
 
 
+def _response_output_text(response: Any) -> str:
+    output_text = (getattr(response, "output_text", "") or "").strip()
+    if not output_text:
+        raise ValueError("OpenAI não retornou output_text.")
+    return output_text
+
+
+def _carregar_resultado_response(response: Any) -> dict[str, Any]:
+    try:
+        resultado = json.loads(_response_output_text(response))
+    except json.JSONDecodeError as exc:
+        raise ValueError("OpenAI retornou JSON inválido.") from exc
+    if not isinstance(resultado, dict):
+        raise ValueError("OpenAI retornou payload em formato inválido.")
+    return resultado
+
+
+def _validar_slides_openai(slides: Any, quantidade_esperada: int) -> list[dict[str, Any]]:
+    if not isinstance(slides, list):
+        raise ValueError("OpenAI retornou slides em formato inválido.")
+    if len(slides) != quantidade_esperada:
+        raise ValueError(f"OpenAI retornou {len(slides)} slides; esperado {quantidade_esperada}.")
+
+    numeros = [slide.get("numero_slide") for slide in slides if isinstance(slide, dict)]
+    numeros_esperados = list(range(1, quantidade_esperada + 1))
+    if sorted(numeros) != numeros_esperados:
+        raise ValueError(
+            f"OpenAI retornou numeração de slides inválida; esperado {numeros_esperados}."
+        )
+    return sorted(slides, key=lambda item: item["numero_slide"])
+
+
 def gerar_carrossel_com_openai(db: Session, carrossel: Carrossel, *, regenerar: bool = False) -> Carrossel:
     _verificar_limites(db, carrossel)
 
@@ -262,76 +294,90 @@ def gerar_carrossel_com_openai(db: Session, carrossel: Carrossel, *, regenerar: 
     if regenerar or carrossel.slides:
         _limpar_slides(db, carrossel)
 
-    client = OpenAI(api_key=OPENAI_API_KEY)
-    response = client.responses.create(
-        model=OPENAI_MODEL,
-        instructions=(
-            "Você é um estrategista de conteúdo para Instagram. "
-            "Gere roteiros de carrossel claros, revisáveis e prontos para aprovação humana. "
-            "Use linguagem natural, objetiva e adequada ao público informado."
-        ),
-        input=_prompt_usuario(carrossel),
-        max_output_tokens=OPENAI_MAX_OUTPUT_TOKENS,
-        reasoning={"effort": OPENAI_REASONING_EFFORT},
-        text={
-            "verbosity": OPENAI_VERBOSITY,
-            "format": {
-                "type": "json_schema",
-                "name": "carrossel_textual",
-                "strict": True,
-                "schema": CARROSSEL_RESPONSE_SCHEMA,
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.responses.create(
+            model=OPENAI_MODEL,
+            instructions=(
+                "Você é um estrategista de conteúdo para Instagram. "
+                "Gere roteiros de carrossel claros, revisáveis e prontos para aprovação humana. "
+                "Use linguagem natural, objetiva e adequada ao público informado."
+            ),
+            input=_prompt_usuario(carrossel),
+            max_output_tokens=OPENAI_MAX_OUTPUT_TOKENS,
+            reasoning={"effort": OPENAI_REASONING_EFFORT},
+            text={
+                "verbosity": OPENAI_VERBOSITY,
+                "format": {
+                    "type": "json_schema",
+                    "name": "carrossel_textual",
+                    "strict": True,
+                    "schema": CARROSSEL_RESPONSE_SCHEMA,
+                },
             },
-        },
-    )
-
-    resultado = json.loads(response.output_text)
-    slides = resultado.get("slides", [])
-    quantidade_esperada = carrossel.quantidade_slides or len(slides)
-    if len(slides) != quantidade_esperada:
-        raise ValueError(f"OpenAI retornou {len(slides)} slides; esperado {quantidade_esperada}.")
-
-    usage = _usage_to_dict(response)
-    carrossel.titulo = resultado["titulo"] or carrossel.titulo
-    carrossel.tema = resultado["tema"] or carrossel.tema
-    carrossel.publico_alvo = resultado["publico_alvo"] or carrossel.publico_alvo
-    carrossel.legenda = resultado["legenda"]
-    carrossel.hashtags = _normalizar_hashtags(resultado.get("hashtags", []))
-    carrossel.ia_resultado = {
-        "mock": False,
-        "provider": "openai",
-        "model": OPENAI_MODEL,
-        "response_id": response.id,
-        "usage": usage,
-        "request_config": request_config,
-        "resultado": resultado,
-    }
-
-    for slide in sorted(slides, key=lambda item: item["numero_slide"]):
-        db.add(
-            CarrosselSlide(
-                carrossel_id=carrossel.id,
-                numero_slide=slide["numero_slide"],
-                titulo=slide["titulo"],
-                texto_principal=slide["texto_principal"],
-                texto_secundario=slide.get("texto_secundario"),
-                observacao_visual=slide["observacao_visual"],
-                layout_config={"template": "mvp_default", "mock": False, "source": "openai"},
-            )
         )
 
-    carrossel.status = STATUS_AGUARDANDO_APROVACAO
-    registrar_log(
-        db,
-        carrossel_id=carrossel.id,
-        etapa="geracao_ia",
-        status="CONCLUIDO",
-        mensagem="Geração textual com OpenAI concluída.",
-        detalhes={
-            "modelo": OPENAI_MODEL,
-            "slides_criados": len(slides),
-            "response_id": response.id,
+        resultado = _carregar_resultado_response(response)
+        quantidade_esperada = carrossel.quantidade_slides or 7
+        slides = _validar_slides_openai(resultado.get("slides"), quantidade_esperada)
+        usage = _usage_to_dict(response)
+
+        carrossel.titulo = resultado["titulo"] or carrossel.titulo
+        carrossel.tema = resultado["tema"] or carrossel.tema
+        carrossel.publico_alvo = resultado["publico_alvo"] or carrossel.publico_alvo
+        carrossel.legenda = resultado["legenda"]
+        carrossel.hashtags = _normalizar_hashtags(resultado.get("hashtags", []))
+        carrossel.ia_resultado = {
+            "mock": False,
+            "provider": "openai",
+            "model": OPENAI_MODEL,
+            "response_id": getattr(response, "id", None),
             "usage": usage,
-            "limites": _limites_configurados(),
-        },
-    )
-    return carrossel
+            "request_config": request_config,
+            "resultado": resultado,
+        }
+
+        for slide in slides:
+            db.add(
+                CarrosselSlide(
+                    carrossel_id=carrossel.id,
+                    numero_slide=slide["numero_slide"],
+                    titulo=slide["titulo"],
+                    texto_principal=slide["texto_principal"],
+                    texto_secundario=slide.get("texto_secundario"),
+                    observacao_visual=slide["observacao_visual"],
+                    layout_config={"template": "mvp_default", "mock": False, "source": "openai"},
+                )
+            )
+        db.flush()
+
+        carrossel.status = STATUS_AGUARDANDO_APROVACAO
+        registrar_log(
+            db,
+            carrossel_id=carrossel.id,
+            etapa="geracao_ia",
+            status="CONCLUIDO",
+            mensagem="Geração textual com OpenAI concluída.",
+            detalhes={
+                "modelo": OPENAI_MODEL,
+                "slides_criados": len(slides),
+                "response_id": getattr(response, "id", None),
+                "usage": usage,
+                "limites": _limites_configurados(),
+            },
+        )
+        return carrossel
+    except Exception as exc:
+        registrar_log(
+            db,
+            carrossel_id=carrossel.id,
+            etapa="geracao_ia",
+            status="ERRO",
+            mensagem="Geração textual com OpenAI falhou.",
+            detalhes={
+                "modelo": OPENAI_MODEL,
+                "erro": str(exc),
+                "limites": _limites_configurados(),
+            },
+        )
+        raise
