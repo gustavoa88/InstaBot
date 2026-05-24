@@ -1,8 +1,14 @@
-import { CalendarClock, CheckCircle2, Image, Play, RefreshCw, Send, XCircle } from 'lucide-react';
+import { CalendarClock, CheckCircle2, Image, ImagePlus, Play, RefreshCw, Send, Trash2, XCircle } from 'lucide-react';
 
 function toDatetimeLocalValue(date = new Date()) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
   return local.toISOString().slice(0, 16);
+}
+
+function resolveMediaUrl(url) {
+  if (!url) return '';
+  if (/^https?:\/\//.test(url)) return url;
+  return `/api${url}`;
 }
 
 const TEMPLATE_OPTIONS = [
@@ -22,6 +28,8 @@ export function ActionPanel({
   onGenerate,
   onRegenerate,
   onRenderSlides,
+  onGenerateAsset,
+  onDeleteAsset,
   onApprove,
   onReject,
   onSchedule,
@@ -39,6 +47,7 @@ export function ActionPanel({
     );
   }
 
+  const activeAsset = [...(selected.assets || [])].filter((asset) => asset.status === 'ATIVO').sort((a, b) => b.id - a.id)[0];
   const canGenerate = !selected.slides?.length;
   const canRender = Boolean(selected.slides?.length);
   const canApprove = selected.slides?.length && selected.status !== 'PUBLICADO';
@@ -49,7 +58,7 @@ export function ActionPanel({
   return (
     <aside className="panel rounded-md p-4">
       <h2 className="text-sm font-semibold text-ink">Ações do fluxo</h2>
-      <p className="mt-1 text-xs leading-5 text-ink/55">Gerar ou regenerar pode usar OpenAI quando a chave estiver ativa.</p>
+      <p className="mt-1 text-xs leading-5 text-ink/55">Gerar, regenerar ou criar asset pode usar OpenAI quando a chave estiver ativa.</p>
       <div className="mt-3 grid gap-2">
         <button className="secondary-button justify-start" onClick={onGenerate} disabled={loading || !canGenerate}>
           <Play className="h-4 w-4" />
@@ -59,6 +68,30 @@ export function ActionPanel({
           <RefreshCw className="h-4 w-4" />
           Regenerar
         </button>
+      </div>
+
+      <div className="mt-4 rounded-md border border-line bg-white p-3">
+        <h3 className="text-sm font-semibold text-ink">Asset visual</h3>
+        {activeAsset?.asset_url ? (
+          <figure className="mt-3 overflow-hidden rounded-md border border-line bg-stone-50">
+            <img className="aspect-[2/3] w-full object-cover" src={resolveMediaUrl(activeAsset.asset_url)} alt="Asset visual do carrossel" />
+            <figcaption className="border-t border-line px-3 py-2 text-xs text-ink/55">
+              #{activeAsset.id} · {activeAsset.modelo || 'asset'}
+            </figcaption>
+          </figure>
+        ) : (
+          <p className="mt-2 rounded-md border border-dashed border-line bg-stone-50 px-3 py-4 text-sm text-ink/55">Nenhum asset visual gerado.</p>
+        )}
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button className="secondary-button" onClick={onGenerateAsset} disabled={loading}>
+            <ImagePlus className="h-4 w-4" />
+            {activeAsset ? 'Regenerar' : 'Gerar'}
+          </button>
+          <button className="danger-button" onClick={() => activeAsset && onDeleteAsset(activeAsset.id)} disabled={loading || !activeAsset}>
+            <Trash2 className="h-4 w-4" />
+            Remover
+          </button>
+        </div>
       </div>
 
       <div className="mt-4 rounded-md border border-line bg-white p-3">
@@ -101,6 +134,15 @@ export function ActionPanel({
               onChange={(event) => onRenderForm({ ...renderForm, primary_color: event.target.value })}
             />
           </div>
+        </label>
+        <label className="mt-3 flex items-center gap-2 text-sm text-ink/70">
+          <input
+            type="checkbox"
+            checked={Boolean(renderForm.use_asset)}
+            onChange={(event) => onRenderForm({ ...renderForm, use_asset: event.target.checked })}
+            disabled={!activeAsset}
+          />
+          Usar asset visual atual no render
         </label>
         <button className="secondary-button mt-3 w-full justify-start" onClick={onRenderSlides} disabled={loading || !canRender}>
           <Image className="h-4 w-4" />

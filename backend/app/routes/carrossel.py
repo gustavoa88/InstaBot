@@ -5,7 +5,9 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models.carrossel import (
+    ASSET_STATUS_ATIVO,
     Carrossel,
+    CarrosselAsset,
     CarrosselSlide,
     LogExecucao,
     Publicacao,
@@ -18,6 +20,7 @@ from app.models.carrossel import (
 )
 from app.schemas.carrossel import (
     AgendamentoCreate,
+    AssetVisualRead,
     CarrosselCreate,
     CarrosselRead,
     CarrosselUpdate,
@@ -29,6 +32,7 @@ from app.schemas.carrossel import (
     SlideUpdate,
 )
 from app.services.generation_service import gerar_carrossel_textual
+from app.services.image_asset_service import gerar_asset_visual, remover_asset_visual
 from app.services.log_service import registrar_log
 from app.services.publication_service import publicar_mockado
 from app.security import require_admin_token
@@ -40,7 +44,7 @@ router = APIRouter(dependencies=[Depends(require_admin_token)])
 def buscar_carrossel(db: Session, carrossel_id: int) -> Carrossel:
     carrossel = (
         db.query(Carrossel)
-        .options(joinedload(Carrossel.slides), joinedload(Carrossel.publicacoes))
+        .options(joinedload(Carrossel.slides), joinedload(Carrossel.publicacoes), joinedload(Carrossel.assets))
         .filter(Carrossel.id == carrossel_id)
         .first()
     )
@@ -54,6 +58,13 @@ def buscar_publicacao(db: Session, publicacao_id: int) -> Publicacao:
     if publicacao is None:
         raise HTTPException(status_code=404, detail="Publicação não encontrada.")
     return publicacao
+
+
+def buscar_asset(db: Session, asset_id: int) -> CarrosselAsset:
+    asset = db.query(CarrosselAsset).filter(CarrosselAsset.id == asset_id).first()
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset visual não encontrado.")
+    return asset
 
 
 @router.post("/carrosseis", response_model=CarrosselRead, status_code=status.HTTP_201_CREATED)
@@ -83,7 +94,7 @@ def criar_carrossel(payload: CarrosselCreate, db: Session = Depends(get_db)):
 def listar_carrosseis(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return (
         db.query(Carrossel)
-        .options(joinedload(Carrossel.slides), joinedload(Carrossel.publicacoes))
+        .options(joinedload(Carrossel.slides), joinedload(Carrossel.publicacoes), joinedload(Carrossel.assets))
         .order_by(Carrossel.created_at.desc())
         .offset(skip)
         .limit(limit)
@@ -150,6 +161,39 @@ def regenerar_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
 
 
 
+@router.post("/carrosseis/{carrossel_id}/assets/gerar", response_model=AssetVisualRead, status_code=status.HTTP_201_CREATED)
+def gerar_asset_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
+    carrossel = buscar_carrossel(db, carrossel_id)
+    asset = gerar_asset_visual(db, carrossel)
+    db.commit()
+    db.refresh(asset)
+    return asset
+
+
+@router.get("/carrosseis/{carrossel_id}/assets", response_model=list[AssetVisualRead])
+def listar_assets_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
+    buscar_carrossel(db, carrossel_id)
+    return (
+        db.query(CarrosselAsset)
+        .filter(CarrosselAsset.carrossel_id == carrossel_id)
+        .filter(CarrosselAsset.status == ASSET_STATUS_ATIVO)
+        .order_by(CarrosselAsset.created_at.desc())
+        .all()
+    )
+
+
+@router.delete("/assets/{asset_id}", response_model=AssetVisualRead)
+def remover_asset(asset_id: int, db: Session = Depends(get_db)):
+    asset = buscar_asset(db, asset_id)
+    remover_asset_visual(db, asset)
+    for slide in db.query(CarrosselSlide).filter(CarrosselSlide.carrossel_id == asset.carrossel_id).all():
+        config = slide.layout_config or {}
+        if config.get("asset_id") == asset.id:
+            slide.layout_config = {**config, "asset_id": None}
+    db.commit()
+    db.refresh(asset)
+    return asset
+
 
 @router.post("/carrosseis/{carrossel_id}/renderizar", response_model=CarrosselRead)
 def renderizar_carrossel(
@@ -163,12 +207,18 @@ def renderizar_carrossel(
     if len(carrossel.slides) > 20:
         raise HTTPException(status_code=409, detail="Não é possível renderizar mais de 20 slides.")
     opcoes = payload or RenderizacaoCreate()
+    asset = None
+    if opcoes.asset_id:
+        asset = buscar_asset(db, opcoes.asset_id)
+        if asset.carrossel_id != carrossel.id or asset.status != ASSET_STATUS_ATIVO:
+            raise HTTPException(status_code=404, detail="Asset visual não encontrado para este carrossel.")
     renderizar_carrossel_slides(
         db,
         carrossel,
         template=opcoes.template,
         brand_name=opcoes.brand_name,
         primary_color=opcoes.primary_color,
+        asset=asset,
     )
     db.commit()
     db.refresh(carrossel)

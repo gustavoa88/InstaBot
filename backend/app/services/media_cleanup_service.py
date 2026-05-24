@@ -5,7 +5,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.config import MEDIA_RETENTION_DAYS, STORAGE_PATH
-from app.models.carrossel import Carrossel, CarrosselSlide, STATUS_CANCELADO, STATUS_PUBLICADO, STATUS_REJEITADO
+from app.models.carrossel import ASSET_STATUS_REMOVIDO, Carrossel, CarrosselAsset, CarrosselSlide, STATUS_CANCELADO, STATUS_PUBLICADO, STATUS_REJEITADO
 from app.services.log_service import registrar_log
 
 
@@ -44,6 +44,10 @@ def limpar_midias_expiradas(db: Session) -> int:
         if slide.id in expirados_ids:
             continue
         resolved = _resolver_storage_path(slide.imagem_path, storage_root)
+        if resolved is not None:
+            referencias_ativas.add(resolved)
+    for asset in db.query(CarrosselAsset).filter(CarrosselAsset.status != ASSET_STATUS_REMOVIDO).all():
+        resolved = _resolver_storage_path(asset.asset_path, storage_root)
         if resolved is not None:
             referencias_ativas.add(resolved)
 

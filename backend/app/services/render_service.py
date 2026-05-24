@@ -197,6 +197,60 @@ def _public_url(relative_path: Path, version: str) -> str:
     return f"{base}{path}" if base else path
 
 
+def _resolve_storage_path(relative_path: str | None) -> Path | None:
+    if not relative_path:
+        return None
+    path = Path(relative_path)
+    if path.is_absolute():
+        return None
+    storage_root = Path(STORAGE_PATH).resolve()
+    resolved = (storage_root / path).resolve()
+    if storage_root == resolved or storage_root not in resolved.parents:
+        return None
+    return resolved
+
+
+def _load_asset_image(asset_path: str | None) -> Image.Image | None:
+    resolved = _resolve_storage_path(asset_path)
+    if resolved is None or not resolved.exists():
+        return None
+    try:
+        return Image.open(resolved).convert("RGB")
+    except OSError:
+        return None
+
+
+def _cover_resize(image: Image.Image, size: tuple[int, int]) -> Image.Image:
+    target_w, target_h = size
+    source_w, source_h = image.size
+    scale = max(target_w / source_w, target_h / source_h)
+    resized = image.resize((int(source_w * scale), int(source_h * scale)))
+    left = max(0, (resized.width - target_w) // 2)
+    top = max(0, (resized.height - target_h) // 2)
+    return resized.crop((left, top, left + target_w, top + target_h))
+
+
+def _paste_asset_panel(
+    image: Image.Image,
+    asset_image: Image.Image | None,
+    box: tuple[int, int, int, int],
+    *,
+    radius: int,
+    opacity: float,
+) -> None:
+    if asset_image is None:
+        return
+    x1, y1, x2, y2 = box
+    panel = _cover_resize(asset_image, (x2 - x1, y2 - y1)).convert("RGBA")
+    if opacity < 1:
+        alpha = panel.getchannel("A").point(lambda value: int(value * opacity))
+        panel.putalpha(alpha)
+    mask = Image.new("L", panel.size, 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.rounded_rectangle((0, 0, panel.size[0], panel.size[1]), radius=radius, fill=255)
+    image.paste(panel.convert("RGB"), (x1, y1), mask)
+
+
 def _draw_footer(draw: ImageDraw.ImageDraw, *, brand: str, accent: tuple[int, int, int], fill: tuple[int, int, int]) -> None:
     small_font = _font(23)
     tiny_font = _font(19)
@@ -205,7 +259,7 @@ def _draw_footer(draw: ImageDraw.ImageDraw, *, brand: str, accent: tuple[int, in
     draw.text((CANVAS_SIZE[0] - MARGIN - 118, 1264), "preview", font=tiny_font, fill=WHITE)
 
 
-def _draw_mvp_template(image: Image.Image, carrossel: Carrossel, slide, *, brand: str, accent: tuple[int, int, int]) -> None:
+def _draw_mvp_template(image: Image.Image, carrossel: Carrossel, slide, *, brand: str, accent: tuple[int, int, int], asset_image: Image.Image | None = None) -> None:
     draw = ImageDraw.Draw(image)
     title_font = _font(58, bold=True)
     main_font = _font(44, bold=True)
@@ -215,6 +269,7 @@ def _draw_mvp_template(image: Image.Image, carrossel: Carrossel, slide, *, brand
 
     draw.rectangle((0, 0, CANVAS_SIZE[0], 22), fill=accent)
     draw.rounded_rectangle((MARGIN, 70, CANVAS_SIZE[0] - MARGIN, CANVAS_SIZE[1] - 70), radius=36, fill=WHITE, outline=LINE, width=2)
+    _paste_asset_panel(image, asset_image, (MARGIN + 44, 810, CANVAS_SIZE[0] - MARGIN - 44, 1020), radius=28, opacity=0.62)
     draw.rounded_rectangle((MARGIN + 34, 112, MARGIN + 122, 168), radius=18, fill=_blend(accent, WHITE, 0.82))
     draw.text((MARGIN + 58, 126), f"{slide.numero_slide:02d}", font=small_font, fill=accent)
 
@@ -236,7 +291,7 @@ def _draw_mvp_template(image: Image.Image, carrossel: Carrossel, slide, *, brand
     _draw_footer(draw, brand=brand, accent=accent, fill=accent)
 
 
-def _draw_clean_editorial(image: Image.Image, carrossel: Carrossel, slide, *, brand: str, accent: tuple[int, int, int]) -> None:
+def _draw_clean_editorial(image: Image.Image, carrossel: Carrossel, slide, *, brand: str, accent: tuple[int, int, int], asset_image: Image.Image | None = None) -> None:
     draw = ImageDraw.Draw(image)
     title_font = _font(64, bold=True)
     main_font = _font(40, bold=True)
@@ -250,6 +305,7 @@ def _draw_clean_editorial(image: Image.Image, carrossel: Carrossel, slide, *, br
     draw.rectangle((0, 0, CANVAS_SIZE[0], CANVAS_SIZE[1]), fill=TEMPLATES["clean_editorial"]["background"])
     draw.rounded_rectangle((MARGIN, 82, CANVAS_SIZE[0] - MARGIN, 1210), radius=28, fill=paper, outline=(226, 229, 224), width=2)
     draw.rectangle((MARGIN, 82, MARGIN + 14, 1210), fill=accent)
+    _paste_asset_panel(image, asset_image, (MARGIN + 52, 760, CANVAS_SIZE[0] - MARGIN - 52, 1000), radius=24, opacity=0.72)
     draw.text((MARGIN + 52, 132), f"SLIDE {slide.numero_slide:02d}", font=eyebrow_font, fill=accent)
     draw.text((CANVAS_SIZE[0] - MARGIN - 240, 132), brand, font=small_font, fill=muted)
 
@@ -270,7 +326,7 @@ def _draw_clean_editorial(image: Image.Image, carrossel: Carrossel, slide, *, br
     _draw_footer(draw, brand=brand, accent=accent, fill=muted)
 
 
-def _draw_bold_contrast(image: Image.Image, carrossel: Carrossel, slide, *, brand: str, accent: tuple[int, int, int]) -> None:
+def _draw_bold_contrast(image: Image.Image, carrossel: Carrossel, slide, *, brand: str, accent: tuple[int, int, int], asset_image: Image.Image | None = None) -> None:
     draw = ImageDraw.Draw(image)
     title_font = _font(76, bold=True)
     main_font = _font(46, bold=True)
@@ -281,6 +337,7 @@ def _draw_bold_contrast(image: Image.Image, carrossel: Carrossel, slide, *, bran
     muted = TEMPLATES["bold_contrast"]["muted"]
 
     draw.rectangle((0, 0, CANVAS_SIZE[0], CANVAS_SIZE[1]), fill=bg)
+    _paste_asset_panel(image, asset_image, (0, 34, CANVAS_SIZE[0], CANVAS_SIZE[1]), radius=0, opacity=0.25)
     draw.rectangle((0, 0, CANVAS_SIZE[0], 34), fill=accent)
     draw.ellipse((CANVAS_SIZE[0] - 360, 110, CANVAS_SIZE[0] + 180, 650), fill=_blend(accent, bg, 0.42))
     draw.rounded_rectangle((MARGIN, 108, MARGIN + 132, 164), radius=18, fill=accent)
@@ -302,7 +359,7 @@ def _draw_bold_contrast(image: Image.Image, carrossel: Carrossel, slide, *, bran
     _draw_footer(draw, brand=brand, accent=accent, fill=muted)
 
 
-def _draw_soft_brand(image: Image.Image, carrossel: Carrossel, slide, *, brand: str, accent: tuple[int, int, int]) -> None:
+def _draw_soft_brand(image: Image.Image, carrossel: Carrossel, slide, *, brand: str, accent: tuple[int, int, int], asset_image: Image.Image | None = None) -> None:
     draw = ImageDraw.Draw(image)
     title_font = _font(60, bold=True)
     main_font = _font(39, bold=True)
@@ -316,6 +373,7 @@ def _draw_soft_brand(image: Image.Image, carrossel: Carrossel, slide, *, brand: 
 
     draw.rectangle((0, 0, CANVAS_SIZE[0], CANVAS_SIZE[1]), fill=bg)
     draw.rounded_rectangle((MARGIN, 78, CANVAS_SIZE[0] - MARGIN, 1235), radius=42, fill=_blend(tint, WHITE, 0.62))
+    _paste_asset_panel(image, asset_image, (MARGIN + 56, 770, CANVAS_SIZE[0] - MARGIN - 56, 995), radius=30, opacity=0.70)
     draw.rounded_rectangle((MARGIN + 34, 120, CANVAS_SIZE[0] - MARGIN - 34, 224), radius=30, fill=WHITE)
     draw.rounded_rectangle((MARGIN + 60, 145, MARGIN + 162, 198), radius=18, fill=accent)
     draw.text((MARGIN + 91, 158), f"{slide.numero_slide:02d}", font=small_font, fill=WHITE)
@@ -346,6 +404,8 @@ def _render_slide_image(
     template: str,
     brand_name: str | None,
     primary_color: str | None,
+    asset_image: Image.Image | None = None,
+    asset_id: int | None = None,
 ) -> dict[str, Any]:
     template_config = TEMPLATES[template]
     fallback_color = template_config.get("default_color", DEFAULT_PRIMARY_COLOR)
@@ -354,17 +414,17 @@ def _render_slide_image(
     image = Image.new("RGB", CANVAS_SIZE, template_config.get("background", BACKGROUND))
 
     if template == "clean_editorial":
-        _draw_clean_editorial(image, carrossel, slide, brand=brand, accent=accent)
+        _draw_clean_editorial(image, carrossel, slide, brand=brand, accent=accent, asset_image=asset_image)
     elif template == "bold_contrast":
-        _draw_bold_contrast(image, carrossel, slide, brand=brand, accent=accent)
+        _draw_bold_contrast(image, carrossel, slide, brand=brand, accent=accent, asset_image=asset_image)
     elif template == "soft_brand":
-        _draw_soft_brand(image, carrossel, slide, brand=brand, accent=accent)
+        _draw_soft_brand(image, carrossel, slide, brand=brand, accent=accent, asset_image=asset_image)
     else:
-        _draw_mvp_template(image, carrossel, slide, brand=brand, accent=accent)
+        _draw_mvp_template(image, carrossel, slide, brand=brand, accent=accent, asset_image=asset_image)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(output_path, format="PNG", optimize=True)
-    return {"template": template, "brand_name": brand, "primary_color": _rgb_to_hex(accent)}
+    return {"template": template, "brand_name": brand, "primary_color": _rgb_to_hex(accent), "asset_id": asset_id}
 
 
 def renderizar_carrossel_slides(
@@ -374,15 +434,18 @@ def renderizar_carrossel_slides(
     template: str | None = None,
     brand_name: str | None = None,
     primary_color: str | None = None,
+    asset=None,
 ) -> Carrossel:
     selected_template = _template_name(template)
+    asset_image = _load_asset_image(getattr(asset, "asset_path", None)) if asset is not None else None
+    asset_id = getattr(asset, "id", None) if asset is not None else None
     registrar_log(
         db,
         carrossel_id=carrossel.id,
         etapa="renderizacao",
         status="INICIADO",
         mensagem="Renderização determinística dos slides iniciada.",
-        detalhes={"slides": len(carrossel.slides), "template": selected_template},
+        detalhes={"slides": len(carrossel.slides), "template": selected_template, "asset_id": asset_id},
     )
 
     storage_root = Path(STORAGE_PATH).resolve()
@@ -398,6 +461,8 @@ def renderizar_carrossel_slides(
             template=selected_template,
             brand_name=brand_name,
             primary_color=primary_color,
+            asset_image=asset_image,
+            asset_id=asset_id,
         )
         slide.imagem_path = relative_path.as_posix()
         slide.imagem_url = _public_url(relative_path, version)
@@ -408,6 +473,7 @@ def renderizar_carrossel_slides(
             "template": render_options["template"],
             "brand_name": render_options["brand_name"],
             "primary_color": render_options["primary_color"],
+            "asset_id": render_options["asset_id"],
             "canvas": {"width": CANVAS_SIZE[0], "height": CANVAS_SIZE[1]},
             "rendered_at": datetime.utcnow().isoformat(),
         }
@@ -418,6 +484,6 @@ def renderizar_carrossel_slides(
         etapa="renderizacao",
         status="CONCLUIDO",
         mensagem="Renderização determinística dos slides concluída.",
-        detalhes={"slides_renderizados": len(carrossel.slides), "template": selected_template},
+        detalhes={"slides_renderizados": len(carrossel.slides), "template": selected_template, "asset_id": asset_id},
     )
     return carrossel

@@ -16,6 +16,9 @@ STATUS_CANCELADO = "CANCELADO"
 STATUS_PUBLICADO = "PUBLICADO"
 STATUS_ERRO_PUBLICACAO = "ERRO_PUBLICACAO"
 
+ASSET_STATUS_ATIVO = "ATIVO"
+ASSET_STATUS_REMOVIDO = "REMOVIDO"
+
 CARROSSEL_STATUS = {
     STATUS_RASCUNHO,
     STATUS_GERANDO,
@@ -75,6 +78,41 @@ class Carrossel(Base):
         back_populates="carrossel",
         cascade="all, delete-orphan",
     )
+    assets = relationship(
+        "CarrosselAsset",
+        back_populates="carrossel",
+        cascade="all, delete-orphan",
+    )
+
+
+class CarrosselAsset(Base):
+    __tablename__ = "carrossel_asset"
+
+    id = Column(BigInteger, primary_key=True, index=True)
+    carrossel_id = Column(
+        BigInteger,
+        ForeignKey("carrossel.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    tipo = Column(String(50), nullable=False, default="background")
+    status = Column(String(50), nullable=False, default=ASSET_STATUS_ATIVO)
+    prompt = Column(Text)
+    revised_prompt = Column(Text)
+    asset_path = Column(Text)
+    asset_url = Column(Text)
+    modelo = Column(String(100))
+    provider_response = Column(JSONB)
+
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(
+        TIMESTAMP,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    carrossel = relationship("Carrossel", back_populates="assets")
 
 
 class CarrosselSlide(Base):

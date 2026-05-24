@@ -8,15 +8,24 @@ from pydantic import ValidationError
 
 from app.schemas.carrossel import CarrosselCreate, RenderizacaoCreate, SlideUpdate
 from app.security import require_admin_token
-from app.services import media_cleanup_service, render_service
+from app.services import image_asset_service, media_cleanup_service, render_service
 
 
 class FakeDb:
     def __init__(self):
         self.added = []
+        self.committed = False
 
     def add(self, item):
         self.added.append(item)
+
+    def flush(self):
+        for index, item in enumerate(self.added, start=1):
+            if hasattr(item, "id") and getattr(item, "id", None) is None:
+                item.id = index
+
+    def commit(self):
+        self.committed = True
 
 
 def test_admin_token_blocks_missing_and_accepts_configured(monkeypatch):
@@ -64,10 +73,48 @@ def _fake_carrossel(template_id=10):
     return carrossel, slide
 
 
+
+def test_image_asset_fallback_creates_relative_png(tmp_path, monkeypatch):
+    monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(image_asset_service, "STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(image_asset_service, "PUBLIC_BASE_URL", "")
+    carrossel, _slide = _fake_carrossel(template_id=30)
+    carrossel.ideia_original = "Ideia para asset visual"
+    carrossel.publico_alvo = "Criadores"
+    carrossel.tom = "profissional"
+    carrossel.prompt_config = {}
+
+    asset = image_asset_service.gerar_asset_visual(FakeDb(), carrossel)
+
+    assert asset.asset_path.startswith("carrosseis/30/assets/asset-")
+    assert asset.asset_url.startswith("/storage/carrosseis/30/assets/asset-")
+    assert asset.modelo == image_asset_service.FALLBACK_MODEL
+    rendered = tmp_path / asset.asset_path
+    assert rendered.exists()
+    assert rendered.read_bytes().startswith(b"\x89PNG")
+
+
+def test_image_asset_limit_blocks_without_openai_call(monkeypatch):
+    monkeypatch.setattr(image_asset_service, "OPENAI_IMAGE_DAILY_REQUEST_LIMIT", 1)
+    monkeypatch.setattr(image_asset_service, "OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT", 2)
+    monkeypatch.setattr(image_asset_service, "_count_openai_image_calls", lambda *args, **kwargs: 1)
+    carrossel, _slide = _fake_carrossel(template_id=31)
+
+    with pytest.raises(HTTPException) as exc_info:
+        image_asset_service._verify_limits(FakeDb(), carrossel)
+
+    assert exc_info.value.status_code == 429
+
+
 def test_render_service_creates_relative_png_and_metadata(tmp_path, monkeypatch):
     monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
     monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
     carrossel, slide = _fake_carrossel()
+
+    asset_path = tmp_path / "carrosseis/10/assets/asset-test.png"
+    asset_path.parent.mkdir(parents=True)
+    Image.new("RGB", (1024, 1536), (40, 80, 120)).save(asset_path)
+    asset = SimpleNamespace(id=99, asset_path="carrosseis/10/assets/asset-test.png")
 
     render_service.renderizar_carrossel_slides(
         FakeDb(),
@@ -75,6 +122,7 @@ def test_render_service_creates_relative_png_and_metadata(tmp_path, monkeypatch)
         template="clean_editorial",
         brand_name="InstaBot",
         primary_color="#336699",
+        asset=asset,
     )
 
     assert slide.imagem_path == "carrosseis/10/slides/slide-01.png"
@@ -83,6 +131,7 @@ def test_render_service_creates_relative_png_and_metadata(tmp_path, monkeypatch)
     assert slide.layout_config["template"] == "clean_editorial"
     assert slide.layout_config["brand_name"] == "InstaBot"
     assert slide.layout_config["primary_color"] == "#336699"
+    assert slide.layout_config["asset_id"] == 99
     rendered = tmp_path / slide.imagem_path
     assert rendered.exists()
     assert rendered.read_bytes().startswith(b"\x89PNG")

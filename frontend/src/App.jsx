@@ -18,6 +18,7 @@ const DEFAULT_RENDER_FORM = {
   template: 'clean_editorial',
   brand_name: '',
   primary_color: '#6f9684',
+  use_asset: true,
 };
 
 function toIsoFromLocal(value) {
@@ -170,11 +171,15 @@ export default function App() {
     await loadData(selected.id);
   }, message).catch(() => {});
 
-  const renderSlides = () => simpleAction((id) => api.renderSlides(id, {
-    template: renderForm.template || null,
-    brand_name: renderForm.brand_name || null,
-    primary_color: renderForm.primary_color || null,
-  }), 'Slides renderizados.');
+  const renderSlides = () => {
+    const activeAsset = [...(selected?.assets || [])].filter((asset) => asset.status === 'ATIVO').sort((a, b) => b.id - a.id)[0];
+    return simpleAction((id) => api.renderSlides(id, {
+      template: renderForm.template || null,
+      brand_name: renderForm.brand_name || null,
+      primary_color: renderForm.primary_color || null,
+      asset_id: renderForm.use_asset && activeAsset ? activeAsset.id : null,
+    }), 'Slides renderizados.');
+  };
 
   const schedule = () => run(async () => {
     await api.schedule(selected.id, {
@@ -268,6 +273,11 @@ export default function App() {
             onGenerate={() => simpleAction(api.generate, 'Slides gerados.')}
             onRegenerate={regenerateCarrossel}
             onRenderSlides={renderSlides}
+            onGenerateAsset={() => simpleAction(api.generateAsset, 'Asset visual gerado.')}
+            onDeleteAsset={(assetId) => run(async () => {
+              await api.deleteAsset(assetId);
+              await loadData(selected.id);
+            }, 'Asset visual removido.').catch(() => {})}
             onApprove={() => simpleAction(api.approve, 'Carrossel aprovado.')}
             onReject={() => simpleAction(api.reject, 'Carrossel rejeitado.')}
             onSchedule={schedule}

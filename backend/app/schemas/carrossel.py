@@ -41,6 +41,7 @@ class RenderizacaoCreate(BaseModel):
     template: str | None = Field(default=None, max_length=50)
     brand_name: str | None = Field(default=None, max_length=80)
     primary_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    asset_id: int | None = Field(default=None, ge=1)
 
 
 class AgendamentoCreate(BaseModel):
@@ -67,6 +68,23 @@ class SlideRead(BaseModel):
     imagem_url: str | None = None
     layout_config: dict[str, Any] | None = None
     aprovado: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class AssetVisualRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    carrossel_id: int
+    tipo: str
+    status: str
+    prompt: str | None = None
+    revised_prompt: str | None = None
+    asset_path: str | None = None
+    asset_url: str | None = None
+    modelo: str | None = None
+    provider_response: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -126,3 +144,4 @@ class CarrosselRead(BaseModel):
     updated_at: datetime
     slides: list[SlideRead] = Field(default_factory=list)
     publicacoes: list[PublicacaoRead] = Field(default_factory=list)
+    assets: list[AssetVisualRead] = Field(default_factory=list)

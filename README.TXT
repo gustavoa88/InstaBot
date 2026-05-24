@@ -473,6 +473,16 @@ Exemplo:
 MEDIA_RETENTION_DAYS=30
 ```
 
+## Acesso local e Nginx opcional
+
+Para acessar pela rede local, defina no `.env`:
+
+```env
+APP_BIND_HOST=0.0.0.0
+```
+
+O Compose mantém PostgreSQL e Redis em `127.0.0.1`; apenas backend e frontend são expostos. Há um exemplo opcional de proxy em `deploy/nginx.local.conf.example` para servir frontend, API e storage por uma única porta. Use `PUBLIC_BASE_URL` quando previews precisarem apontar para uma URL externa fixa.
+
 ---
 
 ## RT001.1 — Limpeza automática de mídia
@@ -584,12 +594,15 @@ POST /carrosseis/{id}/regenerar
 
 ---
 
-## Slides
+## Slides e assets visuais
 
 ```http
 GET /carrosseis/{id}/slides
 PUT /slides/{slide_id}
 POST /carrosseis/{id}/renderizar
+POST /carrosseis/{id}/assets/gerar
+GET /carrosseis/{id}/assets
+DELETE /assets/{asset_id}
 ```
 
 O endpoint de renderização aceita payload opcional:
@@ -598,7 +611,8 @@ O endpoint de renderização aceita payload opcional:
 {
   "template": "clean_editorial",
   "brand_name": "InstaBot",
-  "primary_color": "#6f9684"
+  "primary_color": "#6f9684",
+  "asset_id": 1
 }
 ```
 
@@ -689,6 +703,10 @@ REDIS_URL=redis://redis:6379/0
 
 OPENAI_API_KEY=
 OPENAI_MODEL=
+OPENAI_IMAGE_MODEL=gpt-image-1-mini
+OPENAI_IMAGE_SIZE=1024x1536
+OPENAI_IMAGE_DAILY_REQUEST_LIMIT=10
+OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT=2
 
 INSTAGRAM_ACCESS_TOKEN=
 INSTAGRAM_USER_ID=
@@ -698,8 +716,19 @@ STORAGE_PATH=/app/storage
 PUBLIC_BASE_URL=
 
 # Para acessar de outro dispositivo na mesma rede, use APP_BIND_HOST=0.0.0.0 no .env.
+# Se usar proxy externo, configure PUBLIC_BASE_URL com a URL pública do backend.
 MEDIA_RETENTION_DAYS=30
 ```
+
+## Acesso local e Nginx opcional
+
+Para acessar pela rede local, defina no `.env`:
+
+```env
+APP_BIND_HOST=0.0.0.0
+```
+
+O Compose mantém PostgreSQL e Redis em `127.0.0.1`; apenas backend e frontend são expostos. Há um exemplo opcional de proxy em `deploy/nginx.local.conf.example` para servir frontend, API e storage por uma única porta. Use `PUBLIC_BASE_URL` quando previews precisarem apontar para uma URL externa fixa.
 
 ---
 
