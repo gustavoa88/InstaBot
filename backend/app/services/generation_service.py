@@ -74,3 +74,20 @@ def gerar_carrossel_mockado(db: Session, carrossel: Carrossel, *, regenerar: boo
         detalhes={"slides_criados": quantidade},
     )
     return carrossel
+
+
+def gerar_carrossel_textual(db: Session, carrossel: Carrossel, *, regenerar: bool = False) -> Carrossel:
+    from app.services.ai_service import gerar_carrossel_com_openai, openai_configurado
+
+    if not openai_configurado():
+        registrar_log(
+            db,
+            carrossel_id=carrossel.id,
+            etapa="geracao_ia",
+            status="FALLBACK_MOCK",
+            mensagem="OPENAI_API_KEY não configurada; usando geração mockada.",
+            detalhes={"regenerar": regenerar},
+        )
+        return gerar_carrossel_mockado(db, carrossel, regenerar=regenerar)
+
+    return gerar_carrossel_com_openai(db, carrossel, regenerar=regenerar)

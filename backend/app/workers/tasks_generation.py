@@ -1,6 +1,6 @@
 from app.database import SessionLocal
 from app.models.carrossel import Carrossel
-from app.services.generation_service import gerar_carrossel_mockado
+from app.services.generation_service import gerar_carrossel_textual
 from app.workers.celery_app import celery_app
 
 
@@ -11,7 +11,7 @@ def gerar_carrossel(carrossel_id: int, regenerar: bool = False):
         carrossel = db.query(Carrossel).filter(Carrossel.id == carrossel_id).first()
         if carrossel is None:
             return {"ok": False, "erro": "Carrossel não encontrado."}
-        gerar_carrossel_mockado(db, carrossel, regenerar=regenerar)
+        gerar_carrossel_textual(db, carrossel, regenerar=regenerar)
         db.commit()
         return {"ok": True, "carrossel_id": carrossel_id}
     except Exception:

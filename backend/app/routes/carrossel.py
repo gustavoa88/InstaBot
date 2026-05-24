@@ -27,7 +27,7 @@ from app.schemas.carrossel import (
     SlideRead,
     SlideUpdate,
 )
-from app.services.generation_service import gerar_carrossel_mockado
+from app.services.generation_service import gerar_carrossel_textual
 from app.services.log_service import registrar_log
 from app.services.publication_service import publicar_mockado
 
@@ -131,7 +131,7 @@ def gerar_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
             status_code=409,
             detail="Carrossel já possui slides. Use /regenerar para substituir.",
         )
-    gerar_carrossel_mockado(db, carrossel, regenerar=False)
+    gerar_carrossel_textual(db, carrossel, regenerar=False)
     db.commit()
     db.refresh(carrossel)
     return buscar_carrossel(db, carrossel.id)
@@ -140,7 +140,7 @@ def gerar_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
 @router.post("/carrosseis/{carrossel_id}/regenerar", response_model=CarrosselRead)
 def regenerar_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
     carrossel = buscar_carrossel(db, carrossel_id)
-    gerar_carrossel_mockado(db, carrossel, regenerar=True)
+    gerar_carrossel_textual(db, carrossel, regenerar=True)
     db.commit()
     db.refresh(carrossel)
     return buscar_carrossel(db, carrossel.id)
