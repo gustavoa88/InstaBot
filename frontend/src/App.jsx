@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Loader2 } from 'lucide-react';
+import { AlertTriangle, KeyRound, Loader2 } from 'lucide-react';
 import { ActionPanel } from './components/ActionPanel.jsx';
 import { CarrosselList } from './components/CarrosselList.jsx';
 import { CreateCarrosselForm } from './components/CreateCarrosselForm.jsx';
@@ -68,6 +68,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [adminTokenInput, setAdminTokenInput] = useState(() => api.getAdminToken());
 
   const selected = useMemo(
     () => carrosseis.find((item) => item.id === selectedId) || null,
@@ -134,6 +135,13 @@ export default function App() {
   }, [selected]);
 
   const refresh = () => run(() => loadData(selectedId), 'Dados atualizados.').catch(() => {});
+
+  const saveAdminToken = (event) => {
+    event.preventDefault();
+    api.setAdminToken(adminTokenInput);
+    setAdminTokenInput(api.getAdminToken());
+    showNotice('Token admin atualizado.');
+  };
 
   const createCarrossel = (event) => {
     event.preventDefault();
@@ -219,10 +227,27 @@ export default function App() {
             <h1 className="text-lg font-semibold text-ink">Content Carousel Console</h1>
             <p className="text-sm text-ink/55">MVP operacional para criar, revisar, aprovar e agendar carrosséis.</p>
           </div>
-          <div className="flex items-center gap-2 text-sm text-ink/60">
-            {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-            <span>{loading ? 'Processando' : 'Pronto'}</span>
-          </div>
+          <form className="flex flex-wrap items-end justify-end gap-2" onSubmit={saveAdminToken}>
+            <label className="min-w-[220px]">
+              <span className="field-label">Token admin</span>
+              <input
+                className="input mt-1"
+                type="password"
+                value={adminTokenInput}
+                onChange={(event) => setAdminTokenInput(event.target.value)}
+                placeholder="ccp_admin_token"
+                autoComplete="off"
+              />
+            </label>
+            <button className="secondary-button" type="submit" disabled={loading}>
+              <KeyRound className="h-4 w-4" />
+              Salvar token
+            </button>
+            <div className="flex items-center gap-2 text-sm text-ink/60">
+              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+              <span>{loading ? 'Processando' : 'Pronto'}</span>
+            </div>
+          </form>
         </div>
       </header>
 

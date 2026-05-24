@@ -1,10 +1,31 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
-const ADMIN_TOKEN = import.meta.env.VITE_ADMIN_TOKEN || localStorage.getItem('ccp_admin_token') || '';
+const ADMIN_TOKEN_STORAGE_KEY = 'ccp_admin_token';
+
+function getAdminToken() {
+  const localToken = localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
+  const envToken = import.meta.env.VITE_ADMIN_TOKEN || '';
+  return localToken || envToken;
+}
+
+function setAdminToken(token) {
+  const nextToken = token.trim();
+  if (nextToken) {
+    localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, nextToken);
+  } else {
+    localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+  }
+}
+
+const initialEnvToken = import.meta.env.VITE_ADMIN_TOKEN;
+if (initialEnvToken && !localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY)) {
+  setAdminToken(initialEnvToken);
+}
 
 async function request(path, options = {}) {
+  const adminToken = getAdminToken();
   const headers = {
     'Content-Type': 'application/json',
-    ...(ADMIN_TOKEN ? { 'X-Admin-Token': ADMIN_TOKEN } : {}),
+    ...(adminToken ? { 'X-Admin-Token': adminToken } : {}),
     ...(options.headers || {}),
   };
 
@@ -37,6 +58,8 @@ const json = (method, path, payload) => request(path, {
 });
 
 export const api = {
+  getAdminToken,
+  setAdminToken,
   listCarrosseis: () => request('/carrosseis'),
   getCarrossel: (id) => request(`/carrosseis/${id}`),
   createCarrossel: (payload) => json('POST', '/carrosseis', payload),
