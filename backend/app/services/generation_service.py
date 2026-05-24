@@ -9,6 +9,16 @@ from app.models.carrossel import (
 from app.services.log_service import registrar_log
 
 
+def _titulo_curto_da_ideia(ideia: str, limite: int = 90) -> str:
+    primeira_linha = (ideia or "").strip().splitlines()[0].strip()
+    if not primeira_linha:
+        return "Ideia central do carrossel"
+    if len(primeira_linha) <= limite:
+        return primeira_linha
+    corte = primeira_linha[:limite].rsplit(" ", 1)[0].strip() or primeira_linha[:limite].strip()
+    return f"{corte}..."
+
+
 def gerar_carrossel_mockado(db: Session, carrossel: Carrossel, *, regenerar: bool = False) -> Carrossel:
     carrossel.status = STATUS_GERANDO
     registrar_log(
@@ -26,13 +36,16 @@ def gerar_carrossel_mockado(db: Session, carrossel: Carrossel, *, regenerar: boo
         db.flush()
 
     quantidade = carrossel.quantidade_slides or 7
-    tema = carrossel.tema or "tema principal"
+    carrossel.titulo = carrossel.titulo or _titulo_curto_da_ideia(carrossel.ideia_original)
+    carrossel.tema = carrossel.tema or "tema principal"
+    carrossel.publico_alvo = carrossel.publico_alvo or "público geral"
+    tema = carrossel.tema
     tom = carrossel.tom or "claro e direto"
-    publico = carrossel.publico_alvo or "público geral"
+    publico = carrossel.publico_alvo
 
     for numero in range(1, quantidade + 1):
         if numero == 1:
-            titulo = carrossel.titulo or "Ideia central do carrossel"
+            titulo = carrossel.titulo
             texto = carrossel.ideia_original
             observacao = "Slide de abertura com título forte e visual limpo."
         elif numero == quantidade:
@@ -56,11 +69,14 @@ def gerar_carrossel_mockado(db: Session, carrossel: Carrossel, *, regenerar: boo
             )
         )
 
-    carrossel.legenda = carrossel.legenda or f"{carrossel.titulo or tema}\n\nConteúdo gerado para revisão manual."
+    carrossel.legenda = carrossel.legenda or f"{carrossel.titulo}\n\nConteúdo gerado para revisão manual."
     carrossel.hashtags = carrossel.hashtags or ["#conteudo", "#carrossel", "#instagram"]
     carrossel.ia_resultado = {
         "mock": True,
         "quantidade_slides": quantidade,
+        "titulo": carrossel.titulo,
+        "tema": carrossel.tema,
+        "publico_alvo": carrossel.publico_alvo,
         "observacao": "Substituir por OpenAI após validação do fluxo MVP.",
     }
     carrossel.status = STATUS_AGUARDANDO_APROVACAO

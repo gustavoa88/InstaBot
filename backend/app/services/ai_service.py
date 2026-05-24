@@ -28,9 +28,11 @@ from app.services.log_service import registrar_log
 CARROSSEL_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["titulo", "slides", "legenda", "hashtags", "cta_final"],
+    "required": ["titulo", "tema", "publico_alvo", "slides", "legenda", "hashtags", "cta_final"],
     "properties": {
         "titulo": {"type": "string"},
+        "tema": {"type": "string"},
+        "publico_alvo": {"type": "string"},
         "slides": {
             "type": "array",
             "minItems": 1,
@@ -121,13 +123,17 @@ Crie um roteiro de carrossel para Instagram com {carrossel.quantidade_slides or 
 Dados da ideia:
 - Título atual: {titulo}
 - Ideia original: {ideia}
-- Tema: {tema}
+- Tema atual: {tema}
 - Tom de voz: {tom}
-- Público-alvo: {publico}
+- Público-alvo atual: {publico}
 - Observações adicionais: {observacoes}
 
 Regras:
 - Escreva em português do Brasil.
+- Sempre retorne um título, um tema e um público-alvo coerentes com a ideia; refine valores existentes quando fizer sentido.
+- O título deve ser claro e atrativo, com no máximo 90 caracteres.
+- O tema deve ser uma categoria curta.
+- O público-alvo deve ser específico o bastante para orientar o conteúdo.
 - O primeiro slide deve funcionar como abertura forte.
 - O último slide deve ter fechamento e chamada para ação.
 - Os textos devem ser curtos o suficiente para caber em slides de Instagram.
@@ -286,6 +292,8 @@ def gerar_carrossel_com_openai(db: Session, carrossel: Carrossel, *, regenerar: 
 
     usage = _usage_to_dict(response)
     carrossel.titulo = resultado["titulo"] or carrossel.titulo
+    carrossel.tema = resultado["tema"] or carrossel.tema
+    carrossel.publico_alvo = resultado["publico_alvo"] or carrossel.publico_alvo
     carrossel.legenda = resultado["legenda"]
     carrossel.hashtags = _normalizar_hashtags(resultado.get("hashtags", []))
     carrossel.ia_resultado = {

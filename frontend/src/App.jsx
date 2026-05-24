@@ -8,11 +8,8 @@ import { Workspace } from './components/Workspace.jsx';
 import { api } from './services/api.js';
 
 const EMPTY_FORM = {
-  titulo: '',
   ideia_original: '',
-  tema: '',
   tom: '',
-  publico_alvo: '',
   quantidade_slides: '7',
   observacoes_adicionais: '',
 };
@@ -42,11 +39,8 @@ function normalizeCarrosselPayload(draft) {
 
 function normalizeCreatePayload(form) {
   return {
-    titulo: form.titulo || null,
     ideia_original: form.ideia_original,
-    tema: form.tema || null,
     tom: form.tom || null,
-    publico_alvo: form.publico_alvo || null,
     quantidade_slides: Number(form.quantidade_slides || 7),
     observacoes_adicionais: form.observacoes_adicionais || null,
   };
