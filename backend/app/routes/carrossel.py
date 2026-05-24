@@ -30,6 +30,7 @@ from app.schemas.carrossel import (
 from app.services.generation_service import gerar_carrossel_textual
 from app.services.log_service import registrar_log
 from app.services.publication_service import publicar_mockado
+from app.services.render_service import renderizar_carrossel_slides
 
 router = APIRouter()
 
@@ -141,6 +142,19 @@ def gerar_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
 def regenerar_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
     carrossel = buscar_carrossel(db, carrossel_id)
     gerar_carrossel_textual(db, carrossel, regenerar=True)
+    db.commit()
+    db.refresh(carrossel)
+    return buscar_carrossel(db, carrossel.id)
+
+
+
+
+@router.post("/carrosseis/{carrossel_id}/renderizar", response_model=CarrosselRead)
+def renderizar_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
+    carrossel = buscar_carrossel(db, carrossel_id)
+    if not carrossel.slides:
+        raise HTTPException(status_code=409, detail="Não é possível renderizar sem slides gerados.")
+    renderizar_carrossel_slides(db, carrossel)
     db.commit()
     db.refresh(carrossel)
     return buscar_carrossel(db, carrossel.id)

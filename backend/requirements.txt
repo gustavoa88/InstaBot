@@ -8,3 +8,4 @@ python-dotenv
 redis
 celery
 openai
+Pillow

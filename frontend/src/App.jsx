@@ -252,6 +252,7 @@ export default function App() {
             onRescheduleForm={(publicationId, next) => setRescheduleForms((current) => ({ ...current, [publicationId]: next }))}
             onGenerate={() => simpleAction(api.generate, 'Slides gerados.')}
             onRegenerate={regenerateCarrossel}
+            onRenderSlides={() => simpleAction(api.renderSlides, 'Slides renderizados.')}
             onApprove={() => simpleAction(api.approve, 'Carrossel aprovado.')}
             onReject={() => simpleAction(api.reject, 'Carrossel rejeitado.')}
             onSchedule={schedule}

@@ -1,11 +1,11 @@
-import { CalendarClock, CheckCircle2, Play, RefreshCw, Send, XCircle } from 'lucide-react';
+import { CalendarClock, CheckCircle2, Image, Play, RefreshCw, Send, XCircle } from 'lucide-react';
 
 function toDatetimeLocalValue(date = new Date()) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
   return local.toISOString().slice(0, 16);
 }
 
-export function ActionPanel({ selected, scheduleForm, rescheduleForms, onScheduleForm, onRescheduleForm, onGenerate, onRegenerate, onApprove, onReject, onSchedule, onReschedule, onCancelPublication, onPublishNow, loading }) {
+export function ActionPanel({ selected, scheduleForm, rescheduleForms, onScheduleForm, onRescheduleForm, onGenerate, onRegenerate, onRenderSlides, onApprove, onReject, onSchedule, onReschedule, onCancelPublication, onPublishNow, loading }) {
   if (!selected) {
     return (
       <aside className="panel rounded-md p-4">
@@ -16,6 +16,7 @@ export function ActionPanel({ selected, scheduleForm, rescheduleForms, onSchedul
   }
 
   const canGenerate = !selected.slides?.length;
+  const canRender = Boolean(selected.slides?.length);
   const canApprove = selected.slides?.length && selected.status !== 'PUBLICADO';
   const canSchedule = selected.status === 'APROVADO';
   const canPublish = ['APROVADO', 'AGENDADO'].includes(selected.status);
@@ -32,6 +33,10 @@ export function ActionPanel({ selected, scheduleForm, rescheduleForms, onSchedul
         <button className="secondary-button justify-start" onClick={onRegenerate} disabled={loading}>
           <RefreshCw className="h-4 w-4" />
           Regenerar
+        </button>
+        <button className="secondary-button justify-start" onClick={onRenderSlides} disabled={loading || !canRender}>
+          <Image className="h-4 w-4" />
+          Renderizar slides
         </button>
         <button className="primary-button justify-start" onClick={onApprove} disabled={loading || !canApprove}>
           <CheckCircle2 className="h-4 w-4" />

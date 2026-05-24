@@ -6,6 +6,12 @@ function hashtagsToText(hashtags) {
   return Array.isArray(hashtags) ? hashtags.join(' ') : '';
 }
 
+function resolveMediaUrl(url) {
+  if (!url) return '';
+  if (/^https?:\/\//.test(url)) return url;
+  return `/api${url}`;
+}
+
 export function Workspace({ selected, draft, slideDrafts, onDraftChange, onSlideDraftChange, onSaveCarrossel, onSaveSlide, onDelete, loading }) {
   if (!selected) {
     return <EmptyState title="Selecione ou crie um carrossel" description="A revisão de slides, legenda e metadados aparece aqui assim que houver um item ativo." />;
@@ -78,7 +84,7 @@ export function Workspace({ selected, draft, slideDrafts, onDraftChange, onSlide
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold text-ink">Slides</h2>
-            <p className="text-xs text-ink/55">Edite textos e observações visuais geradas pelo mock</p>
+            <p className="text-xs text-ink/55">Edite textos, observações visuais e confira previews renderizados</p>
           </div>
         </div>
         <div className="grid gap-3 xl:grid-cols-2">
@@ -94,6 +100,12 @@ export function Workspace({ selected, draft, slideDrafts, onDraftChange, onSlide
                     Salvar
                   </button>
                 </div>
+                {draftSlide.imagem_url && (
+                  <figure className="mb-3 overflow-hidden rounded-md border border-line bg-stone-50">
+                    <img className="aspect-[4/5] w-full object-cover" src={resolveMediaUrl(draftSlide.imagem_url)} alt={`Preview renderizado do slide ${slide.numero_slide}`} />
+                    <figcaption className="border-t border-line px-3 py-2 text-xs text-ink/55">Preview renderizado</figcaption>
+                  </figure>
+                )}
                 <label className="block">
                   <span className="field-label">Título do slide</span>
                   <input className="input mt-1" value={draftSlide.titulo || ''} onChange={(event) => updateSlide('titulo', event.target.value)} />
@@ -114,7 +126,7 @@ export function Workspace({ selected, draft, slideDrafts, onDraftChange, onSlide
             );
           })}
         </div>
-        {!selected.slides?.length && <EmptyState title="Sem slides gerados" description="Use Gerar no painel de ações para criar a estrutura mockada do carrossel." />}
+        {!selected.slides?.length && <EmptyState title="Sem slides gerados" description="Use Gerar no painel de ações para criar a estrutura do carrossel." />}
       </section>
     </main>
   );
