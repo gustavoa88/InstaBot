@@ -191,6 +191,14 @@ export default function App() {
     await loadData(selected.id);
   }, 'Publicação cancelada.').catch(() => {});
 
+  const regenerateCarrossel = () => {
+    const confirmed = window.confirm(
+      'Regenerar substitui os slides atuais e pode gerar custo se a OpenAI estiver ativa. Deseja continuar?',
+    );
+    if (!confirmed) return;
+    simpleAction(api.regenerate, 'Slides regenerados.');
+  };
+
   return (
     <div className="min-h-screen bg-paper text-ink">
       <header className="border-b border-line bg-white px-4 py-3">
@@ -249,7 +257,7 @@ export default function App() {
             onScheduleForm={setScheduleForm}
             onRescheduleForm={(publicationId, next) => setRescheduleForms((current) => ({ ...current, [publicationId]: next }))}
             onGenerate={() => simpleAction(api.generate, 'Slides gerados.')}
-            onRegenerate={() => simpleAction(api.regenerate, 'Slides regenerados.')}
+            onRegenerate={regenerateCarrossel}
             onApprove={() => simpleAction(api.approve, 'Carrossel aprovado.')}
             onReject={() => simpleAction(api.reject, 'Carrossel rejeitado.')}
             onSchedule={schedule}

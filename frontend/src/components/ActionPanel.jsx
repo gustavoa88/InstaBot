@@ -23,10 +23,11 @@ export function ActionPanel({ selected, scheduleForm, rescheduleForms, onSchedul
   return (
     <aside className="panel rounded-md p-4">
       <h2 className="text-sm font-semibold text-ink">Ações do fluxo</h2>
+      <p className="mt-1 text-xs leading-5 text-ink/55">Gerar ou regenerar pode usar OpenAI quando a chave estiver ativa.</p>
       <div className="mt-3 grid gap-2">
         <button className="secondary-button justify-start" onClick={onGenerate} disabled={loading || !canGenerate}>
           <Play className="h-4 w-4" />
-          Gerar mock
+          Gerar
         </button>
         <button className="secondary-button justify-start" onClick={onRegenerate} disabled={loading}>
           <RefreshCw className="h-4 w-4" />
