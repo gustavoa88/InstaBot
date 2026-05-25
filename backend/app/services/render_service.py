@@ -294,37 +294,83 @@ def _draw_mvp_template(image: Image.Image, carrossel: Carrossel, slide, *, brand
 
 def _draw_clean_editorial(image: Image.Image, carrossel: Carrossel, slide, *, brand: str, accent: tuple[int, int, int], asset_image: Image.Image | None = None) -> None:
     draw = ImageDraw.Draw(image)
-    title_font = _font(64, bold=True)
-    main_font = _font(40, bold=True)
-    body_font = _font(29)
-    small_font = _font(22)
+    title_font = _font(68, bold=True)
+    main_font = _font(43, bold=True)
+    body_font = _font(31)
+    small_font = _font(23)
     eyebrow_font = _font(20, bold=True)
     ink = TEMPLATES["clean_editorial"]["ink"]
     muted = TEMPLATES["clean_editorial"]["muted"]
     paper = TEMPLATES["clean_editorial"]["paper"]
+    bg = TEMPLATES["clean_editorial"]["background"]
 
-    draw.rectangle((0, 0, CANVAS_SIZE[0], CANVAS_SIZE[1]), fill=TEMPLATES["clean_editorial"]["background"])
-    draw.rounded_rectangle((MARGIN, 82, CANVAS_SIZE[0] - MARGIN, 1210), radius=28, fill=paper, outline=(226, 229, 224), width=2)
-    draw.rectangle((MARGIN, 82, MARGIN + 14, 1210), fill=accent)
-    _paste_asset_panel(image, asset_image, (MARGIN + 52, 760, CANVAS_SIZE[0] - MARGIN - 52, 1000), radius=24, opacity=0.72)
-    draw.text((MARGIN + 52, 132), f"SLIDE {slide.numero_slide:02d}", font=eyebrow_font, fill=accent)
-    draw.text((CANVAS_SIZE[0] - MARGIN - 240, 132), brand, font=small_font, fill=muted)
+    draw.rectangle((0, 0, CANVAS_SIZE[0], CANVAS_SIZE[1]), fill=bg)
+    if asset_image is not None:
+        hero = _cover_resize(asset_image, (CANVAS_SIZE[0], 880)).convert("RGB")
+        image.paste(hero, (0, 0))
+        shade = Image.new("RGB", (CANVAS_SIZE[0], 880), _blend(accent, DARK, 0.45))
+        image.paste(Image.blend(hero, shade, 0.22), (0, 0))
+    else:
+        for y in range(880):
+            ratio = y / 880
+            color = _blend(_blend(accent, WHITE, 0.38), _blend(accent, DARK, 0.18), ratio)
+            draw.line((0, y, CANVAS_SIZE[0], y), fill=color)
 
-    y = 210
-    y = _draw_wrapped(draw, slide.titulo or getattr(carrossel, "titulo", None), xy=(MARGIN + 52, y), font=title_font, fill=ink, width=CONTENT_WIDTH - 104, max_lines=3, line_gap=18)
-    y += 38
-    draw.line((MARGIN + 52, y, MARGIN + 260, y), fill=accent, width=5)
-    y += 52
-    y = _draw_wrapped(draw, slide.texto_principal, xy=(MARGIN + 52, y), font=main_font, fill=ink, width=CONTENT_WIDTH - 104, max_lines=8, line_gap=17)
+    draw.rectangle((0, 670, CANVAS_SIZE[0], 910), fill=_blend(accent, DARK, 0.48))
+    draw.rounded_rectangle((56, 62, 205, 114), radius=26, fill=paper)
+    draw.text((82, 76), f"SLIDE {slide.numero_slide:02d}", font=eyebrow_font, fill=accent)
+    brand_text = brand[:34]
+    brand_width = min(440, max(180, _measure(draw, brand_text, small_font) + 46))
+    draw.rounded_rectangle((CANVAS_SIZE[0] - 56 - brand_width, 62, CANVAS_SIZE[0] - 56, 114), radius=26, fill=(255, 255, 255))
+    draw.text((CANVAS_SIZE[0] - 56 - brand_width + 23, 76), brand_text, font=small_font, fill=muted)
+
+    card_top = 720
+    card_left = 56
+    card_right = CANVAS_SIZE[0] - 56
+    card_bottom = 1264
+    draw.rounded_rectangle((card_left, card_top + 14, card_right, card_bottom + 14), radius=44, fill=(20, 24, 25))
+    draw.rounded_rectangle((card_left, card_top, card_right, card_bottom), radius=44, fill=paper)
+    draw.rounded_rectangle((card_left + 36, card_top + 38, card_left + 134, card_top + 50), radius=6, fill=accent)
+
+    y = card_top + 76
+    y = _draw_wrapped(
+        draw,
+        slide.titulo or getattr(carrossel, "titulo", None),
+        xy=(card_left + 42, y),
+        font=title_font,
+        fill=ink,
+        width=card_right - card_left - 84,
+        max_lines=3,
+        line_gap=14,
+    )
+    y += 28
+    y = _draw_wrapped(
+        draw,
+        slide.texto_principal,
+        xy=(card_left + 42, y),
+        font=main_font,
+        fill=ink,
+        width=card_right - card_left - 84,
+        max_lines=5,
+        line_gap=15,
+    )
 
     if slide.texto_secundario:
-        y += 32
-        _draw_wrapped(draw, slide.texto_secundario, xy=(MARGIN + 52, y), font=body_font, fill=muted, width=CONTENT_WIDTH - 104, max_lines=4, line_gap=13)
+        y += 24
+        _draw_wrapped(
+            draw,
+            slide.texto_secundario,
+            xy=(card_left + 42, y),
+            font=body_font,
+            fill=muted,
+            width=card_right - card_left - 84,
+            max_lines=3,
+            line_gap=11,
+        )
 
-    draw.rounded_rectangle((MARGIN + 52, 1020, CANVAS_SIZE[0] - MARGIN - 52, 1148), radius=20, fill=_blend(accent, WHITE, 0.9))
-    draw.text((MARGIN + 78, 1043), "Direção visual", font=eyebrow_font, fill=accent)
-    _draw_wrapped(draw, slide.observacao_visual, xy=(MARGIN + 78, 1074), font=small_font, fill=muted, width=CONTENT_WIDTH - 156, max_lines=2, line_gap=8)
-    _draw_footer(draw, brand=brand, accent=accent, fill=muted)
+    draw.rounded_rectangle((card_left + 42, card_bottom - 62, card_left + 168, card_bottom - 24), radius=19, fill=accent)
+    draw.text((card_left + 72, card_bottom - 55), "preview", font=_font(18, bold=True), fill=WHITE)
+    draw.text((card_right - 162, card_bottom - 54), brand[:20], font=_font(18), fill=muted)
 
 
 def _draw_bold_contrast(image: Image.Image, carrossel: Carrossel, slide, *, brand: str, accent: tuple[int, int, int], asset_image: Image.Image | None = None) -> None:
@@ -438,8 +484,8 @@ def renderizar_carrossel_slides(
     asset=None,
 ) -> Carrossel:
     selected_template = _template_name(template)
-    global_asset_image = _load_asset_image(getattr(asset, "asset_path", None)) if asset is not None else None
-    global_asset_obj = asset if asset is not None else None
+    fallback_asset_image = _load_asset_image(getattr(asset, "asset_path", None)) if asset is not None else None
+    fallback_asset_id = getattr(asset, "id", None) if asset is not None else None
 
     registrar_log(
         db,
@@ -447,16 +493,17 @@ def renderizar_carrossel_slides(
         etapa="renderizacao",
         status="INICIADO",
         mensagem="Renderização determinística dos slides iniciada.",
-        detalhes={"slides": len(carrossel.slides), "template": selected_template, "global_asset_id": getattr(global_asset_obj, "id", None)},
+        detalhes={"slides": len(carrossel.slides), "template": selected_template, "fallback_asset_id": fallback_asset_id},
     )
 
     storage_root = Path(STORAGE_PATH).resolve()
     version = datetime.utcnow().strftime("%Y%m%d%H%M%S")
 
     for slide in carrossel.slides:
-        # Always generate/load one asset per slide (keeps previews unique per slide)
         slide_asset_obj = gerar_asset_visual_slide(db, carrossel, slide)
         slide_asset_image = _load_asset_image(getattr(slide_asset_obj, "asset_path", None))
+        effective_asset_image = slide_asset_image or fallback_asset_image
+        effective_asset_id = getattr(slide_asset_obj, "id", None) if slide_asset_image is not None else fallback_asset_id
 
         relative_path = _relative_slide_path(carrossel.id, slide.numero_slide)
         output_path = storage_root / relative_path
@@ -467,8 +514,8 @@ def renderizar_carrossel_slides(
             template=selected_template,
             brand_name=brand_name,
             primary_color=primary_color,
-            asset_image=slide_asset_image,
-            asset_id=getattr(slide_asset_obj, "id", None),
+            asset_image=effective_asset_image,
+            asset_id=effective_asset_id,
         )
 
         slide.imagem_path = relative_path.as_posix()
@@ -484,6 +531,7 @@ def renderizar_carrossel_slides(
             "slide_asset_id": getattr(slide_asset_obj, "id", None),
             "slide_asset_path": getattr(slide_asset_obj, "asset_path", None),
             "slide_asset_prompt": getattr(slide_asset_obj, "prompt", None),
+            "slide_asset_prompt_hash": (getattr(slide_asset_obj, "provider_response", None) or {}).get("prompt_hash"),
             "canvas": {"width": CANVAS_SIZE[0], "height": CANVAS_SIZE[1]},
             "rendered_at": datetime.utcnow().isoformat(),
         }
@@ -494,6 +542,6 @@ def renderizar_carrossel_slides(
         etapa="renderizacao",
         status="CONCLUIDO",
         mensagem="Renderização determinística dos slides concluída.",
-        detalhes={"slides_renderizados": len(carrossel.slides), "template": selected_template, "global_asset_id": getattr(global_asset_obj, "id", None)},
+        detalhes={"slides_renderizados": len(carrossel.slides), "template": selected_template, "fallback_asset_id": fallback_asset_id},
     )
     return carrossel

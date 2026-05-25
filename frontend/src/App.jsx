@@ -180,7 +180,7 @@ export default function App() {
   }, message).catch(() => {});
 
   const renderSlides = () => {
-    const activeAsset = [...(selected?.assets || [])].filter((asset) => asset.status === 'ATIVO').sort((a, b) => b.id - a.id)[0];
+    const activeAsset = [...(selected?.assets || [])].filter((asset) => asset.status === 'ATIVO' && asset.tipo === 'background').sort((a, b) => b.id - a.id)[0];
     return simpleAction((id) => api.renderSlides(id, {
       template: renderForm.template || null,
       brand_name: renderForm.brand_name || null,

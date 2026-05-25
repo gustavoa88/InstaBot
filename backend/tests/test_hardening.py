@@ -146,6 +146,33 @@ def test_render_service_creates_relative_png_and_metadata(tmp_path, monkeypatch)
         assert image.size == (1080, 1350)
 
 
+def test_clean_editorial_uses_slide_asset_as_large_hero(tmp_path, monkeypatch):
+    monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
+    carrossel, slide = _fake_carrossel(template_id=18)
+    asset_path = tmp_path / "carrosseis/18/assets/slide-blue.png"
+    asset_path.parent.mkdir(parents=True)
+    Image.new("RGB", (1024, 1536), (18, 74, 190)).save(asset_path)
+
+    def fake_slide_asset(*_args, **_kwargs):
+        return SimpleNamespace(
+            id=501,
+            asset_path="carrosseis/18/assets/slide-blue.png",
+            prompt="Briefing visual simples com azul editorial.",
+            provider_response={"prompt_hash": "blue-hero"},
+        )
+
+    monkeypatch.setattr(render_service, "gerar_asset_visual_slide", fake_slide_asset)
+
+    render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial", primary_color="#336699")
+
+    with Image.open(tmp_path / slide.imagem_path) as image:
+        assert image.size == (1080, 1350)
+        red, green, blue = image.getpixel((540, 260))
+        assert blue > red
+        assert blue > green
+
+
 @pytest.mark.parametrize("template", ["clean_editorial", "bold_contrast", "soft_brand"])
 def test_render_service_supports_visual_templates(tmp_path, monkeypatch, template):
     monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
@@ -182,15 +209,97 @@ def test_render_service_generates_distinct_fallback_asset_per_slide(tmp_path, mo
         layout_config={},
     )
     carrossel.slides = [first_slide, second_slide]
+    db = FakeDb()
 
-    render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial")
+    render_service.renderizar_carrossel_slides(db, carrossel, template="clean_editorial")
 
     first_asset = tmp_path / first_slide.layout_config["slide_asset_path"]
     second_asset = tmp_path / second_slide.layout_config["slide_asset_path"]
     assert first_slide.layout_config["slide_asset_path"] != second_slide.layout_config["slide_asset_path"]
+    assert first_slide.layout_config["slide_asset_prompt_hash"] != second_slide.layout_config["slide_asset_prompt_hash"]
+    assert "Briefing visual simples" in first_slide.layout_config["slide_asset_prompt"]
+    assert "formas diagonais" in second_slide.layout_config["slide_asset_prompt"]
     assert first_asset.exists()
     assert second_asset.exists()
     assert first_asset.read_bytes() != second_asset.read_bytes()
+
+
+def test_render_service_reuses_slide_asset_when_prompt_is_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(image_asset_service, "STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(image_asset_service, "PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "")
+    carrossel, slide = _fake_carrossel(template_id=41)
+    db = FakeDb()
+
+    render_service.renderizar_carrossel_slides(db, carrossel, template="clean_editorial")
+    assets_after_first_render = [item for item in db.added if getattr(item, "tipo", None) == "slide_background"]
+    first_asset_id = slide.layout_config["slide_asset_id"]
+
+    render_service.renderizar_carrossel_slides(db, carrossel, template="clean_editorial")
+    assets_after_second_render = [item for item in db.added if getattr(item, "tipo", None) == "slide_background"]
+
+    assert len(assets_after_first_render) == 1
+    assert len(assets_after_second_render) == 1
+    assert slide.layout_config["slide_asset_id"] == first_asset_id
+
+
+def test_slide_asset_generation_falls_back_when_openai_limit_is_reached(tmp_path, monkeypatch):
+    monkeypatch.setattr(image_asset_service, "STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(image_asset_service, "PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(image_asset_service, "OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT", 2)
+    monkeypatch.setattr(image_asset_service, "_count_openai_image_calls", lambda *args, **kwargs: 2)
+    carrossel, slide = _fake_carrossel(template_id=42)
+    db = FakeDb()
+
+    asset = image_asset_service.gerar_asset_visual_slide(db, carrossel, slide)
+
+    assert asset.modelo == image_asset_service.FALLBACK_MODEL
+    assert asset.provider_response["fallback_reason"] == "limite_openai"
+    assert asset.provider_response["prompt_hash"]
+    assert (tmp_path / asset.asset_path).exists()
+
+
+def test_render_service_finishes_with_slide_fallback_when_openai_limit_is_reached(tmp_path, monkeypatch):
+    monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(image_asset_service, "STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(image_asset_service, "PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(image_asset_service, "OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT", 2)
+    monkeypatch.setattr(image_asset_service, "_count_openai_image_calls", lambda *args, **kwargs: 2)
+    carrossel, first_slide = _fake_carrossel(template_id=43)
+    second_slide = SimpleNamespace(
+        id=2,
+        carrossel_id=43,
+        numero_slide=2,
+        titulo="Segundo slide",
+        texto_principal="Outro texto principal para validar fallback em render",
+        texto_secundario=None,
+        observacao_visual="Composição editorial com contraste diferente.",
+        imagem_path=None,
+        imagem_url=None,
+        layout_config={},
+    )
+    carrossel.slides = [first_slide, second_slide]
+
+    render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial")
+
+    assert first_slide.layout_config["slide_asset_path"] != second_slide.layout_config["slide_asset_path"]
+    assert (tmp_path / first_slide.layout_config["slide_asset_path"]).exists()
+    assert (tmp_path / second_slide.layout_config["slide_asset_path"]).exists()
+    assert (tmp_path / first_slide.imagem_path).exists()
+    assert (tmp_path / second_slide.imagem_path).exists()
+
+
+def test_frontend_uses_only_global_background_asset_for_render():
+    app_source = Path("frontend/src/App.jsx").read_text()
+    panel_source = Path("frontend/src/components/ActionPanel.jsx").read_text()
+
+    assert "asset.tipo === 'background'" in app_source
+    assert "asset.tipo === 'background'" in panel_source
 
 
 def test_openai_generation_creates_slides_and_updates_status(monkeypatch):
