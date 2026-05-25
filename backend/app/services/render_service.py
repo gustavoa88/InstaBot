@@ -1,13 +1,23 @@
 from datetime import datetime
+from io import BytesIO
+import hashlib
 from pathlib import Path
 from typing import Any
 
+from openai import OpenAI
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy.orm import Session
 
-from app.config import PUBLIC_BASE_URL, STORAGE_PATH
+from app.config import OPENAI_API_KEY, OPENAI_IMAGE_MODEL, OPENAI_IMAGE_SIZE, PUBLIC_BASE_URL, STORAGE_PATH
 from app.models.carrossel import Carrossel
-from app.services.image_asset_service import gerar_asset_visual_slide
+from app.services.image_asset_service import (
+    ASSET_CALL_STARTED,
+    _image_limit_status,
+    _image_response_to_bytes,
+    _limites_configurados,
+    gerar_asset_visual_slide,
+    openai_image_configurado,
+)
 from app.services.log_service import registrar_log
 
 CANVAS_SIZE = (1080, 1350)
@@ -186,6 +196,132 @@ def _text_or_fallback(*values: Any, fallback: str = "Content Carousel") -> str:
 
 def _brand_text(carrossel: Carrossel, brand_name: str | None) -> str:
     return _text_or_fallback(brand_name, getattr(carrossel, "tema", None), fallback="Content Carousel")[:80]
+
+
+def _prompt_full_slide(carrossel: Carrossel, slide, *, brand: str, primary_color: str) -> str:
+    secondary = (getattr(slide, "texto_secundario", None) or "").strip()
+    return f"""
+Crie UM slide final vertical para Instagram, pronto para publicação, com estética editorial premium.
+Formato: imagem vertical 4:5, composição moderna, instagramável, forte hierarquia visual, margens seguras e alta legibilidade.
+
+Contexto do carrossel:
+- Título: {getattr(carrossel, 'titulo', None) or 'Carrossel'}
+- Tema: {getattr(carrossel, 'tema', None) or 'conteúdo editorial'}
+- Tom: {getattr(carrossel, 'tom', None) or 'profissional, claro e envolvente'}
+- Público-alvo: {getattr(carrossel, 'publico_alvo', None) or 'público geral'}
+- Marca/assinatura: {brand}
+- Cor principal sugerida: {primary_color}
+
+Conteúdo exato deste slide:
+- Número do slide: {getattr(slide, 'numero_slide', '')}
+- Título do slide: {getattr(slide, 'titulo', None) or getattr(carrossel, 'titulo', None) or ''}
+- Texto principal: {getattr(slide, 'texto_principal', None) or ''}
+- Texto secundário: {secondary or 'não usar texto secundário se não couber'}
+- Direção visual: {getattr(slide, 'observacao_visual', None) or 'visual editorial forte e coerente com o tema'}
+
+Regras obrigatórias:
+- O resultado deve parecer um slide final de carrossel profissional, não um wireframe.
+- Use imagens/ilustração/fotografia como parte dominante da composição.
+- Inclua o título e o texto principal de forma legível, com português correto.
+- Não invente frases novas além do conteúdo fornecido.
+- Não use logotipos reais, marcas registradas nem pessoas identificáveis.
+- Evite texto pequeno demais, excesso de informação e aparência de template vazio.
+""".strip()
+
+
+def _prompt_hash(prompt: str) -> str:
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
+
+def _save_full_slide_bytes(content: bytes, output_path: Path) -> None:
+    with Image.open(BytesIO(content)).convert("RGB") as generated:
+        final_image = _cover_resize(generated, CANVAS_SIZE)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        final_image.save(output_path, format="PNG", optimize=True)
+
+
+def _render_slide_with_openai(
+    db: Session,
+    carrossel: Carrossel,
+    slide,
+    output_path: Path,
+    *,
+    brand: str,
+    primary_color: str,
+) -> dict[str, Any] | None:
+    if not openai_image_configurado():
+        return None
+
+    limit_status = _image_limit_status(db, carrossel)
+    if limit_status is not None:
+        return {"fallback_reason": "limite_openai", "limit": limit_status}
+
+    prompt = _prompt_full_slide(carrossel, slide, brand=brand, primary_color=primary_color)
+    prompt_hash = _prompt_hash(prompt)
+    registrar_log(
+        db,
+        carrossel_id=carrossel.id,
+        etapa="asset_ia",
+        status=ASSET_CALL_STARTED,
+        mensagem="Renderização de slide completo com OpenAI iniciada.",
+        detalhes={
+            "modelo": OPENAI_IMAGE_MODEL,
+            "size": OPENAI_IMAGE_SIZE,
+            "slide_id": getattr(slide, "id", None),
+            "numero_slide": slide.numero_slide,
+            "prompt_hash": prompt_hash,
+            "limites": _limites_configurados(),
+        },
+    )
+
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.images.generate(
+            model=OPENAI_IMAGE_MODEL,
+            prompt=prompt,
+            size=OPENAI_IMAGE_SIZE,
+            n=1,
+        )
+        content, provider_metadata = _image_response_to_bytes(response)
+        _save_full_slide_bytes(content, output_path)
+    except Exception as exc:
+        registrar_log(
+            db,
+            carrossel_id=carrossel.id,
+            etapa="renderizacao",
+            status="FALLBACK_OPENAI_ERRO",
+            mensagem="Falha ao renderizar slide completo com OpenAI; usando fallback Pillow.",
+            detalhes={
+                "slide_id": getattr(slide, "id", None),
+                "numero_slide": slide.numero_slide,
+                "erro": str(exc),
+                "modelo": OPENAI_IMAGE_MODEL,
+            },
+        )
+        return {"fallback_reason": "erro_openai", "error": str(exc), "image_prompt": prompt, "image_prompt_hash": prompt_hash}
+
+    registrar_log(
+        db,
+        carrossel_id=carrossel.id,
+        etapa="renderizacao",
+        status="OPENAI_FULL_SLIDE_CONCLUIDO",
+        mensagem="Slide completo renderizado com OpenAI.",
+        detalhes={
+            "slide_id": getattr(slide, "id", None),
+            "numero_slide": slide.numero_slide,
+            "modelo": OPENAI_IMAGE_MODEL,
+            "prompt_hash": prompt_hash,
+        },
+    )
+    return {
+        "renderer": "openai_full_slide",
+        "provider": "openai",
+        "image_model": OPENAI_IMAGE_MODEL,
+        "image_size": OPENAI_IMAGE_SIZE,
+        "image_prompt": prompt,
+        "image_prompt_hash": prompt_hash,
+        "provider_response": provider_metadata,
+    }
 
 
 def _relative_slide_path(carrossel_id: int, numero_slide: int) -> Path:
@@ -500,38 +636,79 @@ def renderizar_carrossel_slides(
     version = datetime.utcnow().strftime("%Y%m%d%H%M%S")
 
     for slide in carrossel.slides:
-        slide_asset_obj = gerar_asset_visual_slide(db, carrossel, slide)
-        slide_asset_image = _load_asset_image(getattr(slide_asset_obj, "asset_path", None))
-        effective_asset_image = slide_asset_image or fallback_asset_image
-        effective_asset_id = getattr(slide_asset_obj, "id", None) if slide_asset_image is not None else fallback_asset_id
-
         relative_path = _relative_slide_path(carrossel.id, slide.numero_slide)
         output_path = storage_root / relative_path
-        render_options = _render_slide_image(
+        brand = _brand_text(carrossel, brand_name)
+        accent = _hex_to_rgb(primary_color, TEMPLATES[selected_template].get("default_color", DEFAULT_PRIMARY_COLOR))
+        primary_hex = _rgb_to_hex(accent)
+        ai_render_options = _render_slide_with_openai(
+            db,
             carrossel,
             slide,
             output_path,
-            template=selected_template,
-            brand_name=brand_name,
-            primary_color=primary_color,
-            asset_image=effective_asset_image,
-            asset_id=effective_asset_id,
+            brand=brand,
+            primary_color=primary_hex,
         )
+
+        if ai_render_options and ai_render_options.get("renderer") == "openai_full_slide":
+            render_options = {
+                "template": selected_template,
+                "brand_name": brand,
+                "primary_color": primary_hex,
+                "asset_id": None,
+                **ai_render_options,
+            }
+            slide_asset_obj = None
+        else:
+            if (ai_render_options or {}).get("fallback_reason") == "erro_openai":
+                slide_asset_obj = None
+                effective_asset_image = fallback_asset_image
+                effective_asset_id = fallback_asset_id
+            else:
+                slide_asset_obj = gerar_asset_visual_slide(db, carrossel, slide)
+                slide_asset_image = _load_asset_image(getattr(slide_asset_obj, "asset_path", None))
+                effective_asset_image = slide_asset_image or fallback_asset_image
+                effective_asset_id = getattr(slide_asset_obj, "id", None) if slide_asset_image is not None else fallback_asset_id
+            render_options = _render_slide_image(
+                carrossel,
+                slide,
+                output_path,
+                template=selected_template,
+                brand_name=brand_name,
+                primary_color=primary_color,
+                asset_image=effective_asset_image,
+                asset_id=effective_asset_id,
+            )
+            render_options = {
+                **render_options,
+                "renderer": "pillow",
+                "fallback_reason": (ai_render_options or {}).get("fallback_reason"),
+                "fallback_error": (ai_render_options or {}).get("error"),
+                "limit": (ai_render_options or {}).get("limit"),
+            }
 
         slide.imagem_path = relative_path.as_posix()
         slide.imagem_url = _public_url(relative_path, version)
         layout_config = slide.layout_config or {}
         slide.layout_config = {
             **layout_config,
-            "renderer": "pillow",
+            "renderer": render_options.get("renderer", "pillow"),
             "template": render_options["template"],
             "brand_name": render_options["brand_name"],
             "primary_color": render_options["primary_color"],
-            "asset_id": render_options["asset_id"],
+            "asset_id": render_options.get("asset_id"),
             "slide_asset_id": getattr(slide_asset_obj, "id", None),
             "slide_asset_path": getattr(slide_asset_obj, "asset_path", None),
             "slide_asset_prompt": getattr(slide_asset_obj, "prompt", None),
             "slide_asset_prompt_hash": (getattr(slide_asset_obj, "provider_response", None) or {}).get("prompt_hash"),
+            "provider": render_options.get("provider"),
+            "image_model": render_options.get("image_model"),
+            "image_size": render_options.get("image_size"),
+            "image_prompt": render_options.get("image_prompt"),
+            "image_prompt_hash": render_options.get("image_prompt_hash"),
+            "fallback_reason": render_options.get("fallback_reason"),
+            "fallback_error": render_options.get("fallback_error"),
+            "limit": render_options.get("limit"),
             "canvas": {"width": CANVAS_SIZE[0], "height": CANVAS_SIZE[1]},
             "rendered_at": datetime.utcnow().isoformat(),
         }

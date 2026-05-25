@@ -291,9 +291,10 @@ def gerar_asset_visual(db: Session, carrossel: Carrossel) -> CarrosselAsset:
     prompt = _prompt_asset(carrossel)
     version = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     relative_path = _relative_asset_path(carrossel.id, version)
+    revised_prompt = None
+    limit_status = _image_limit_status(db, carrossel) if openai_image_configurado() else None
 
-    if openai_image_configurado():
-        _verify_limits(db, carrossel)
+    if openai_image_configurado() and limit_status is None:
         registrar_log(
             db,
             carrossel_id=carrossel.id,
@@ -324,17 +325,24 @@ def gerar_asset_visual(db: Session, carrossel: Carrossel) -> CarrosselAsset:
         log_message = "Asset visual com OpenAI concluído."
     else:
         _fallback_image(carrossel, relative_path)
-        revised_prompt = None
         modelo = FALLBACK_MODEL
+        reason = "limite_openai" if limit_status else "openai_nao_configurado"
         provider_response = {
             "provider": "local",
             "mock": True,
             "model": FALLBACK_MODEL,
             "size": "1024x1536",
+            "fallback_reason": reason,
             "generated_at": datetime.utcnow().isoformat(),
         }
-        log_status = "FALLBACK_MOCK"
-        log_message = "Asset visual fallback gerado localmente."
+        if limit_status:
+            provider_response["limit"] = limit_status
+        log_status = "FALLBACK_LIMITE" if limit_status else "FALLBACK_MOCK"
+        log_message = (
+            "Limite de OpenAI atingido; asset visual fallback global gerado localmente."
+            if limit_status
+            else "Asset visual fallback gerado localmente."
+        )
 
     asset = CarrosselAsset(
         carrossel_id=carrossel.id,

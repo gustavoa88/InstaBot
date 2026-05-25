@@ -1,4 +1,6 @@
 from pathlib import Path
+import base64
+from io import BytesIO
 import json
 from types import SimpleNamespace
 
@@ -108,6 +110,27 @@ def test_image_asset_limit_blocks_without_openai_call(monkeypatch):
     assert exc_info.value.status_code == 429
 
 
+def test_global_image_asset_falls_back_when_openai_limit_is_reached(tmp_path, monkeypatch):
+    monkeypatch.setattr(image_asset_service, "STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(image_asset_service, "PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(image_asset_service, "OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT", 2)
+    monkeypatch.setattr(image_asset_service, "_count_openai_image_calls", lambda *args, **kwargs: 2)
+    carrossel, _slide = _fake_carrossel(template_id=32)
+    carrossel.ideia_original = "Ideia para asset visual"
+    carrossel.publico_alvo = "Criadores"
+    carrossel.tom = "profissional"
+    carrossel.prompt_config = {}
+
+    asset = image_asset_service.gerar_asset_visual(FakeDb(), carrossel)
+
+    assert asset.modelo == image_asset_service.FALLBACK_MODEL
+    assert asset.provider_response["fallback_reason"] == "limite_openai"
+    assert asset.provider_response["limit"]["escopo"] == "por carrossel"
+    assert asset.asset_path.startswith("carrosseis/32/assets/asset-")
+    assert (tmp_path / asset.asset_path).exists()
+
+
 def test_render_service_creates_relative_png_and_metadata(tmp_path, monkeypatch):
     monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
     monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
@@ -149,6 +172,7 @@ def test_render_service_creates_relative_png_and_metadata(tmp_path, monkeypatch)
 def test_clean_editorial_uses_slide_asset_as_large_hero(tmp_path, monkeypatch):
     monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
     monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "")
     carrossel, slide = _fake_carrossel(template_id=18)
     asset_path = tmp_path / "carrosseis/18/assets/slide-blue.png"
     asset_path.parent.mkdir(parents=True)
@@ -292,6 +316,98 @@ def test_render_service_finishes_with_slide_fallback_when_openai_limit_is_reache
     assert (tmp_path / second_slide.layout_config["slide_asset_path"]).exists()
     assert (tmp_path / first_slide.imagem_path).exists()
     assert (tmp_path / second_slide.imagem_path).exists()
+
+
+def _png_b64(color):
+    buffer = BytesIO()
+    Image.new("RGB", (1024, 1536), color).save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def test_render_service_uses_openai_full_slide_for_each_slide(tmp_path, monkeypatch):
+    monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(render_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(render_service, "OPENAI_IMAGE_MODEL", "gpt-image-test")
+    monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(render_service, "_image_limit_status", lambda *_args, **_kwargs: None)
+    calls = []
+    colors = [(220, 40, 60), (40, 80, 220)]
+
+    class FakeImages:
+        def generate(self, **kwargs):
+            calls.append(kwargs)
+            color = colors[len(calls) - 1]
+            return SimpleNamespace(data=[SimpleNamespace(b64_json=_png_b64(color))])
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            self.api_key = api_key
+            self.images = FakeImages()
+
+    monkeypatch.setattr(render_service, "OpenAI", FakeOpenAI)
+    carrossel, first_slide = _fake_carrossel(template_id=44)
+    first_slide.titulo = "O começo: um projeto visionário"
+    second_slide = SimpleNamespace(
+        id=2,
+        carrossel_id=44,
+        numero_slide=2,
+        titulo="Chegada ao Brasil",
+        texto_principal="O Fusca desembarca e conquista o país com seu preço e resistência.",
+        texto_secundario="",
+        observacao_visual="Foto antiga do primeiro Fusca no porto ou nas ruas brasileiras dos anos 1950-60.",
+        imagem_path=None,
+        imagem_url=None,
+        layout_config={},
+    )
+    carrossel.slides = [first_slide, second_slide]
+    carrossel.publico_alvo = "Entusiastas de carros clássicos"
+    carrossel.tom = "histórico e nostálgico"
+
+    render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial")
+
+    assert len(calls) == 2
+    assert first_slide.layout_config["renderer"] == "openai_full_slide"
+    assert second_slide.layout_config["renderer"] == "openai_full_slide"
+    assert first_slide.layout_config["image_model"] == "gpt-image-test"
+    assert "O começo: um projeto visionário" in first_slide.layout_config["image_prompt"]
+    assert "Foto antiga do primeiro Fusca" in second_slide.layout_config["image_prompt"]
+    assert first_slide.layout_config["slide_asset_path"] is None
+    assert second_slide.layout_config["slide_asset_path"] is None
+    first_render = tmp_path / first_slide.imagem_path
+    second_render = tmp_path / second_slide.imagem_path
+    assert first_render.exists()
+    assert second_render.exists()
+    assert first_render.read_bytes() != second_render.read_bytes()
+    with Image.open(first_render) as image:
+        assert image.size == (1080, 1350)
+
+
+def test_render_service_falls_back_to_pillow_when_openai_full_slide_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(render_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(render_service, "_image_limit_status", lambda *_args, **_kwargs: None)
+
+    class FakeImages:
+        def generate(self, **_kwargs):
+            raise RuntimeError("image api unavailable")
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            self.api_key = api_key
+            self.images = FakeImages()
+
+    monkeypatch.setattr(render_service, "OpenAI", FakeOpenAI)
+    carrossel, slide = _fake_carrossel(template_id=45)
+
+    render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial")
+
+    assert slide.layout_config["renderer"] == "pillow"
+    assert slide.layout_config["fallback_reason"] == "erro_openai"
+    assert slide.layout_config["fallback_error"] == "image api unavailable"
+    assert (tmp_path / slide.imagem_path).exists()
 
 
 def test_frontend_uses_only_global_background_asset_for_render():
