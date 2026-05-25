@@ -1,4 +1,5 @@
 import base64
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,10 @@ def _relative_asset_path(carrossel_id: int, version: str) -> Path:
     return Path("carrosseis") / str(carrossel_id) / "assets" / f"asset-{version}.png"
 
 
+def _relative_slide_asset_path(carrossel_id: int, numero_slide: int, version: str) -> Path:
+    return Path("carrosseis") / str(carrossel_id) / "assets" / f"slide-{numero_slide:02d}-asset-{version}.png"
+
+
 def _public_url(relative_path: Path, version: str) -> str:
     base = PUBLIC_BASE_URL.rstrip("/")
     path = f"/storage/{relative_path.as_posix()}?v={version}"
@@ -85,6 +90,28 @@ Regras obrigatórias:
 """.strip()
     return base
 
+
+
+
+def _prompt_slide_asset(carrossel: Carrossel, slide) -> str:
+    visual_note = (getattr(slide, "observacao_visual", None) or "").strip()
+    slide_text = (getattr(slide, "texto_principal", None) or "").strip()
+    idea = (getattr(carrossel, "ideia_original", None) or "").strip()
+    return f"""
+Crie uma imagem vertical exclusiva para o slide {getattr(slide, 'numero_slide', '')} de um carrossel de Instagram.
+Tema do carrossel: {carrossel.tema or 'conteúdo profissional'}.
+Título do carrossel: {carrossel.titulo or 'carrossel de conteúdo'}.
+Briefing visual específico do slide: {visual_note[:900] or 'composição limpa e coerente com o conteúdo'}.
+Texto principal do slide para contexto: {slide_text[:500] or 'não informado'}.
+Ideia original para contexto: {idea[:500] or 'não informada'}.
+
+Regras obrigatórias:
+- Não inclua texto, letras, números, logotipos ou marcas.
+- Não use pessoas identificáveis.
+- Faça uma composição diferente dos demais slides, com visual próprio para este briefing.
+- Preserve áreas de respiro para que textos sejam aplicados depois.
+- Visual profissional, vertical e pronto para servir como apoio ao preview do slide.
+""".strip()
 
 def _count_openai_image_calls(db: Session, *, carrossel_id: int | None = None, desde: datetime | None = None) -> int:
     query = db.query(LogExecucao).filter(
@@ -136,11 +163,14 @@ def _save_bytes(content: bytes, relative_path: Path) -> None:
     output_path.write_bytes(content)
 
 
-def _fallback_image(carrossel: Carrossel, relative_path: Path) -> None:
+def _fallback_image(carrossel: Carrossel, relative_path: Path, slide=None) -> None:
     width, height = 1024, 1536
-    image = Image.new("RGB", (width, height), (244, 247, 245))
+    seed_text = f"{getattr(slide, 'numero_slide', '')}|{getattr(slide, 'observacao_visual', '')}|{carrossel.tema or ''}"
+    digest = hashlib.sha256(seed_text.encode("utf-8")).digest()
+    base = (244, 247, 245)
+    image = Image.new("RGB", (width, height), base)
     draw = ImageDraw.Draw(image)
-    accent = (111, 150, 132)
+    accent = (80 + digest[0] % 110, 90 + digest[1] % 100, 100 + digest[2] % 90)
     ink = (35, 45, 43)
     muted = (100, 113, 108)
     for y in range(height):
@@ -151,12 +181,15 @@ def _fallback_image(carrossel: Carrossel, relative_path: Path) -> None:
             int(245 - 14 * ratio),
         )
         draw.line((0, y, width, y), fill=color)
-    draw.ellipse((-230, 120, 480, 820), fill=(219, 232, 224))
-    draw.ellipse((620, 520, 1270, 1260), fill=(203, 220, 214))
-    draw.rounded_rectangle((112, 250, width - 112, height - 260), radius=72, outline=(255, 255, 255), width=12)
-    title = (carrossel.tema or carrossel.titulo or "Content Carousel")[:42]
-    draw.text((140, 1180), title, font=_font(46, bold=True), fill=ink)
-    draw.text((140, 1242), "Asset visual fallback", font=_font(28), fill=muted)
+    draw.ellipse((-230, 120, 480, 820), fill=tuple(min(255, part + 84) for part in accent))
+    draw.ellipse((620, 520, 1270, 1260), fill=tuple(max(0, part - 28) for part in accent))
+    offset = digest[3] % 180
+    draw.rounded_rectangle((112, 220 + offset // 3, width - 112, height - 290 + offset // 4), radius=72, outline=(255, 255, 255), width=12)
+    title = (getattr(slide, "observacao_visual", None) or carrossel.tema or carrossel.titulo or "Content Carousel")[:42]
+    label = f"Slide {getattr(slide, 'numero_slide', '')}".strip() if slide is not None else "Asset visual fallback"
+    draw.text((140, 1126), title, font=_font(42, bold=True), fill=ink)
+    draw.text((140, 1192), label, font=_font(34, bold=True), fill=accent)
+    draw.text((140, 1242), "Fallback local unico", font=_font(28), fill=muted)
     draw.rounded_rectangle((140, 1320, 350, 1378), radius=28, fill=accent)
     draw.text((178, 1334), "sem custo", font=_font(24, bold=True), fill=(255, 255, 255))
     storage_root = Path(STORAGE_PATH).resolve()
@@ -247,6 +280,205 @@ def gerar_asset_visual(db: Session, carrossel: Carrossel) -> CarrosselAsset:
         status=log_status,
         mensagem=log_message,
         detalhes={"asset_id": asset.id, "modelo": modelo, "asset_path": asset.asset_path},
+    )
+    return asset
+
+
+def _prompt_slide_asset(carrossel: Carrossel, slide) -> str:
+    observacao = (slide.observacao_visual or "").strip()
+    titulo_slide = (slide.titulo or f"Slide {slide.numero_slide}").strip()
+    ideia = getattr(carrossel, "ideia_original", "")
+    base = f"""
+Crie uma imagem vertical pensada especificamente para o slide {slide.numero_slide} de um carrossel do Instagram.
+Tema: {carrossel.tema or 'conteúdo profissional'}.
+Título do slide: {titulo_slide}.
+Ideia original: {ideia[:900]}.
+Briefing visual do slide: {observacao or 'visual limpo, abstrato e versátil'}.
+
+Regras obrigatórias:
+- Não inclua texto, letras, números, logotipos ou marcas.
+- Não use pessoas identificáveis.
+- Composição com áreas de respiro para textos.
+- Gere imagens com estética consistente com o tema e variação entre slides.
+""".strip()
+    return base
+
+
+def gerar_asset_visual_slide(db: Session, carrossel: Carrossel, slide) -> CarrosselAsset:
+    """Gera e salva um asset visual específico para um slide (fallback ou OpenAI)."""
+    prompt = _prompt_slide_asset(carrossel, slide)
+    version = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    # filename example: slide-01-asset-20260525...png
+    relative_path = Path("carrosseis") / str(carrossel.id) / "assets" / f"slide-{slide.numero_slide:02d}-asset-{version}.png"
+
+    if openai_image_configurado():
+        _verify_limits(db, carrossel)
+        registrar_log(
+            db,
+            carrossel_id=carrossel.id,
+            etapa="asset_ia",
+            status=ASSET_CALL_STARTED,
+            mensagem="Geração de asset visual por slide com OpenAI iniciada.",
+            detalhes={"slide": slide.numero_slide, "modelo": OPENAI_IMAGE_MODEL, "size": OPENAI_IMAGE_SIZE, "limites": _limites_configurados()},
+        )
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.images.generate(
+            model=OPENAI_IMAGE_MODEL,
+            prompt=prompt,
+            size=OPENAI_IMAGE_SIZE,
+            n=1,
+        )
+        content, provider_metadata = _image_response_to_bytes(response)
+        _save_bytes(content, relative_path)
+        revised_prompt = provider_metadata.get("revised_prompt")
+        modelo = OPENAI_IMAGE_MODEL
+        provider_response = {
+            "provider": "openai",
+            "model": OPENAI_IMAGE_MODEL,
+            "size": OPENAI_IMAGE_SIZE,
+            "response": provider_metadata,
+            "generated_at": datetime.utcnow().isoformat(),
+        }
+        log_status = "CONCLUIDO"
+        log_message = "Asset visual por slide com OpenAI concluído."
+    else:
+        # fallback que varia por slide: inclui indicação do número do slide e pequena variação de cor
+        _fallback_image(carrossel, relative_path)
+        # marca visualmente o fallback para diferenciar slides
+        try:
+            storage_root = Path(STORAGE_PATH).resolve()
+            path = storage_root / relative_path
+            with Image.open(path).convert("RGBA") as im:
+                draw = ImageDraw.Draw(im)
+                badge_text = f"Slide {slide.numero_slide}"
+                fnt = _font(40, bold=True)
+                draw.rectangle((40, 40, 300, 100), fill=(34, 80, 60, 180))
+                draw.text((56, 52), badge_text, font=fnt, fill=(255, 255, 255))
+                im.convert("RGB").save(path, format="PNG", optimize=True)
+        except Exception:
+            pass
+        revised_prompt = None
+        modelo = FALLBACK_MODEL
+        provider_response = {
+            "provider": "local",
+            "mock": True,
+            "model": FALLBACK_MODEL,
+            "size": OPENAI_IMAGE_SIZE,
+            "generated_at": datetime.utcnow().isoformat(),
+        }
+        log_status = "FALLBACK_MOCK"
+        log_message = "Asset visual fallback gerado localmente para slide."
+
+    asset = CarrosselAsset(
+        carrossel_id=carrossel.id,
+        tipo="slide_background",
+        status=ASSET_STATUS_ATIVO,
+        prompt=prompt,
+        revised_prompt=revised_prompt,
+        asset_path=relative_path.as_posix(),
+        asset_url=_public_url(relative_path, version),
+        modelo=modelo,
+        provider_response=provider_response,
+    )
+    db.add(asset)
+    db.flush()
+    registrar_log(
+        db,
+        carrossel_id=carrossel.id,
+        etapa="asset_ia",
+        status=log_status,
+        mensagem=log_message,
+        detalhes={"asset_id": asset.id, "slide": slide.numero_slide, "asset_path": asset.asset_path},
+    )
+    return asset
+
+
+
+def gerar_asset_visual_slide(db: Session, carrossel: Carrossel, slide) -> CarrosselAsset:
+    prompt = _prompt_slide_asset(carrossel, slide)
+    version = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    relative_path = _relative_slide_asset_path(carrossel.id, slide.numero_slide, version)
+
+    if openai_image_configurado():
+        _verify_limits(db, carrossel)
+        registrar_log(
+            db,
+            carrossel_id=carrossel.id,
+            etapa="asset_ia",
+            status=ASSET_CALL_STARTED,
+            mensagem="Geração de asset visual do slide com OpenAI iniciada.",
+            detalhes={
+                "modelo": OPENAI_IMAGE_MODEL,
+                "size": OPENAI_IMAGE_SIZE,
+                "slide_id": getattr(slide, "id", None),
+                "numero_slide": slide.numero_slide,
+                "limites": _limites_configurados(),
+            },
+        )
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.images.generate(
+            model=OPENAI_IMAGE_MODEL,
+            prompt=prompt,
+            size=OPENAI_IMAGE_SIZE,
+            n=1,
+        )
+        content, provider_metadata = _image_response_to_bytes(response)
+        _save_bytes(content, relative_path)
+        revised_prompt = provider_metadata.get("revised_prompt")
+        modelo = OPENAI_IMAGE_MODEL
+        provider_response = {
+            "provider": "openai",
+            "model": OPENAI_IMAGE_MODEL,
+            "size": OPENAI_IMAGE_SIZE,
+            "slide_id": getattr(slide, "id", None),
+            "numero_slide": slide.numero_slide,
+            "response": provider_metadata,
+            "generated_at": datetime.utcnow().isoformat(),
+        }
+        log_status = "CONCLUIDO"
+        log_message = "Asset visual do slide com OpenAI concluído."
+    else:
+        _fallback_image(carrossel, relative_path, slide=slide)
+        revised_prompt = None
+        modelo = FALLBACK_MODEL
+        provider_response = {
+            "provider": "local",
+            "mock": True,
+            "model": FALLBACK_MODEL,
+            "size": "1024x1536",
+            "slide_id": getattr(slide, "id", None),
+            "numero_slide": slide.numero_slide,
+            "generated_at": datetime.utcnow().isoformat(),
+        }
+        log_status = "FALLBACK_MOCK"
+        log_message = "Asset visual fallback do slide gerado localmente."
+
+    asset = CarrosselAsset(
+        carrossel_id=carrossel.id,
+        tipo="slide_background",
+        status=ASSET_STATUS_ATIVO,
+        prompt=prompt,
+        revised_prompt=revised_prompt,
+        asset_path=relative_path.as_posix(),
+        asset_url=_public_url(relative_path, version),
+        modelo=modelo,
+        provider_response=provider_response,
+    )
+    db.add(asset)
+    db.flush()
+    registrar_log(
+        db,
+        carrossel_id=carrossel.id,
+        etapa="asset_ia",
+        status=log_status,
+        mensagem=log_message,
+        detalhes={
+            "asset_id": asset.id,
+            "modelo": modelo,
+            "asset_path": asset.asset_path,
+            "slide_id": getattr(slide, "id", None),
+            "numero_slide": slide.numero_slide,
+        },
     )
     return asset
 
