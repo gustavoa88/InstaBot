@@ -47,7 +47,7 @@ export function ActionPanel({
     );
   }
 
-  const activeAsset = [...(selected.assets || [])].filter((asset) => asset.status === 'ATIVO').sort((a, b) => b.id - a.id)[0];
+  const activeAsset = [...(selected.assets || [])].filter((asset) => asset.status === 'ATIVO' && asset.tipo === 'background').sort((a, b) => b.id - a.id)[0];
   const canGenerate = !selected.slides?.length;
   const canRender = Boolean(selected.slides?.length);
   const canApprove = selected.slides?.length && selected.status !== 'PUBLICADO';

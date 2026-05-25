@@ -24,7 +24,7 @@ from app.services.log_service import registrar_log
 
 ASSET_CALL_STARTED = "INICIADO"
 ASSET_LIMIT_BLOCKED = "BLOQUEADO_LIMITE"
-FALLBACK_MODEL = "fallback_pillow_asset_v1"
+FALLBACK_MODEL = "fallback_pillow_asset_v2"
 
 
 def openai_image_configurado() -> bool:
@@ -72,7 +72,7 @@ def _prompt_asset(carrossel: Carrossel) -> str:
         for slide in (carrossel.slides or [])[:5]
         if slide.observacao_visual
     )
-    base = f"""
+    return f"""
 Crie uma imagem vertical para fundo/ilustração de um carrossel de Instagram.
 Tema: {carrossel.tema or 'conteúdo profissional'}.
 Título: {carrossel.titulo or 'carrossel de conteúdo'}.
@@ -88,9 +88,6 @@ Regras obrigatórias:
 - Gere uma composição com áreas de respiro para textos serem aplicados depois.
 - Visual profissional, coerente e reutilizável em todos os slides.
 """.strip()
-    return base
-
-
 
 
 def _prompt_slide_asset(carrossel: Carrossel, slide) -> str:
@@ -112,6 +109,11 @@ Regras obrigatórias:
 - Preserve áreas de respiro para que textos sejam aplicados depois.
 - Visual profissional, vertical e pronto para servir como apoio ao preview do slide.
 """.strip()
+
+
+def _prompt_hash(prompt: str) -> str:
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
 
 def _count_openai_image_calls(db: Session, *, carrossel_id: int | None = None, desde: datetime | None = None) -> int:
     query = db.query(LogExecucao).filter(
@@ -156,6 +158,19 @@ def _verify_limits(db: Session, carrossel: Carrossel) -> None:
             _block_limit(db, carrossel_id=carrossel.id, escopo="por carrossel", limite=OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT, chamadas=chamadas_carrossel)
 
 
+def _image_limit_status(db: Session, carrossel: Carrossel) -> dict[str, int | str] | None:
+    if OPENAI_IMAGE_DAILY_REQUEST_LIMIT > 0:
+        inicio_dia = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        chamadas_dia = _count_openai_image_calls(db, desde=inicio_dia)
+        if chamadas_dia >= OPENAI_IMAGE_DAILY_REQUEST_LIMIT:
+            return {"escopo": "diário", "limite": OPENAI_IMAGE_DAILY_REQUEST_LIMIT, "chamadas": chamadas_dia}
+    if OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT > 0:
+        chamadas_carrossel = _count_openai_image_calls(db, carrossel_id=carrossel.id)
+        if chamadas_carrossel >= OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT:
+            return {"escopo": "por carrossel", "limite": OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT, "chamadas": chamadas_carrossel}
+    return None
+
+
 def _save_bytes(content: bytes, relative_path: Path) -> None:
     storage_root = Path(STORAGE_PATH).resolve()
     output_path = storage_root / relative_path
@@ -167,31 +182,39 @@ def _fallback_image(carrossel: Carrossel, relative_path: Path, slide=None) -> No
     width, height = 1024, 1536
     seed_text = f"{getattr(slide, 'numero_slide', '')}|{getattr(slide, 'observacao_visual', '')}|{carrossel.tema or ''}"
     digest = hashlib.sha256(seed_text.encode("utf-8")).digest()
-    base = (244, 247, 245)
-    image = Image.new("RGB", (width, height), base)
+    image = Image.new("RGB", (width, height), (244, 247, 245))
     draw = ImageDraw.Draw(image)
-    accent = (80 + digest[0] % 110, 90 + digest[1] % 100, 100 + digest[2] % 90)
-    ink = (35, 45, 43)
-    muted = (100, 113, 108)
+    accent = (70 + digest[0] % 135, 72 + digest[1] % 128, 82 + digest[2] % 118)
+    deep = tuple(max(18, part - 55) for part in accent)
+    warm = (232 + digest[3] % 18, 214 + digest[4] % 28, 190 + digest[5] % 36)
+    mist = tuple(min(255, int(part * 0.38 + 210)) for part in accent)
     for y in range(height):
         ratio = y / height
         color = (
-            int(244 - 26 * ratio),
-            int(247 - 20 * ratio),
-            int(245 - 14 * ratio),
+            int(warm[0] + (mist[0] - warm[0]) * ratio),
+            int(warm[1] + (mist[1] - warm[1]) * ratio),
+            int(warm[2] + (mist[2] - warm[2]) * ratio),
         )
         draw.line((0, y, width, y), fill=color)
-    draw.ellipse((-230, 120, 480, 820), fill=tuple(min(255, part + 84) for part in accent))
-    draw.ellipse((620, 520, 1270, 1260), fill=tuple(max(0, part - 28) for part in accent))
-    offset = digest[3] % 180
-    draw.rounded_rectangle((112, 220 + offset // 3, width - 112, height - 290 + offset // 4), radius=72, outline=(255, 255, 255), width=12)
-    title = (getattr(slide, "observacao_visual", None) or carrossel.tema or carrossel.titulo or "Content Carousel")[:42]
-    label = f"Slide {getattr(slide, 'numero_slide', '')}".strip() if slide is not None else "Asset visual fallback"
-    draw.text((140, 1126), title, font=_font(42, bold=True), fill=ink)
-    draw.text((140, 1192), label, font=_font(34, bold=True), fill=accent)
-    draw.text((140, 1242), "Fallback local unico", font=_font(28), fill=muted)
-    draw.rounded_rectangle((140, 1320, 350, 1378), radius=28, fill=accent)
-    draw.text((178, 1334), "sem custo", font=_font(24, bold=True), fill=(255, 255, 255))
+
+    shift = digest[6] % 220
+    draw.ellipse((-260 + shift, 80, 520 + shift, 860), fill=tuple(min(255, part + 64) for part in accent))
+    draw.ellipse((570 - shift // 2, 520, 1280 - shift // 2, 1290), fill=deep)
+    draw.rounded_rectangle((88, 170, width - 88, height - 220), radius=88, outline=(255, 255, 255), width=14)
+    draw.rounded_rectangle((146, 952, width - 146, 1162), radius=54, fill=tuple(min(255, part + 104) for part in mist))
+    draw.polygon(
+        [
+            (0, 1080 + digest[7] % 120),
+            (width, 820 + digest[8] % 140),
+            (width, height),
+            (0, height),
+        ],
+        fill=tuple(max(0, part - 18) for part in accent),
+    )
+    draw.rounded_rectangle((690, 1020, width + 60, 1288), radius=70, fill=tuple(max(0, part - 36) for part in deep))
+    draw.line((138, 1288, 460, 1288), fill=(255, 255, 255), width=8)
+    if slide is not None:
+        draw.text((138, 1328), f"{slide.numero_slide:02d}", font=_font(52, bold=True), fill=(255, 255, 255))
     storage_root = Path(STORAGE_PATH).resolve()
     output_path = storage_root / relative_path
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -211,13 +234,67 @@ def _image_response_to_bytes(response: Any) -> tuple[bytes, dict[str, Any]]:
     raise ValueError("OpenAI image response did not include b64_json or url.")
 
 
+def _asset_file_exists(asset: CarrosselAsset) -> bool:
+    asset_path = getattr(asset, "asset_path", None)
+    if not asset_path:
+        return False
+    path = Path(asset_path)
+    if path.is_absolute():
+        return False
+    storage_root = Path(STORAGE_PATH).resolve()
+    resolved = (storage_root / path).resolve()
+    return storage_root in resolved.parents and resolved.exists()
+
+
+def _asset_matches_slide(asset: CarrosselAsset, *, slide, prompt_hash: str) -> bool:
+    response = getattr(asset, "provider_response", None) or {}
+    if response.get("provider") == "local" and (getattr(asset, "modelo", None) or response.get("model")) != FALLBACK_MODEL:
+        return False
+    return (
+        getattr(asset, "tipo", None) == "slide_background"
+        and getattr(asset, "status", None) == ASSET_STATUS_ATIVO
+        and response.get("numero_slide") == getattr(slide, "numero_slide", None)
+        and response.get("prompt_hash") == prompt_hash
+        and _asset_file_exists(asset)
+    )
+
+
+def _find_reusable_slide_asset(db: Session, carrossel: Carrossel, slide, prompt_hash: str) -> CarrosselAsset | None:
+    local_candidates = [
+        item
+        for item in getattr(db, "added", [])
+        if isinstance(item, CarrosselAsset) and getattr(item, "carrossel_id", None) == carrossel.id
+    ]
+    for asset in reversed(local_candidates):
+        if _asset_matches_slide(asset, slide=slide, prompt_hash=prompt_hash):
+            return asset
+
+    if not hasattr(db, "query"):
+        return None
+    try:
+        candidates = (
+            db.query(CarrosselAsset)
+            .filter(CarrosselAsset.carrossel_id == carrossel.id)
+            .filter(CarrosselAsset.status == ASSET_STATUS_ATIVO)
+            .filter(CarrosselAsset.tipo == "slide_background")
+            .all()
+        )
+    except Exception:
+        return None
+    for asset in reversed(candidates):
+        if _asset_matches_slide(asset, slide=slide, prompt_hash=prompt_hash):
+            return asset
+    return None
+
+
 def gerar_asset_visual(db: Session, carrossel: Carrossel) -> CarrosselAsset:
     prompt = _prompt_asset(carrossel)
     version = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     relative_path = _relative_asset_path(carrossel.id, version)
+    revised_prompt = None
+    limit_status = _image_limit_status(db, carrossel) if openai_image_configurado() else None
 
-    if openai_image_configurado():
-        _verify_limits(db, carrossel)
+    if openai_image_configurado() and limit_status is None:
         registrar_log(
             db,
             carrossel_id=carrossel.id,
@@ -248,17 +325,24 @@ def gerar_asset_visual(db: Session, carrossel: Carrossel) -> CarrosselAsset:
         log_message = "Asset visual com OpenAI concluído."
     else:
         _fallback_image(carrossel, relative_path)
-        revised_prompt = None
         modelo = FALLBACK_MODEL
+        reason = "limite_openai" if limit_status else "openai_nao_configurado"
         provider_response = {
             "provider": "local",
             "mock": True,
             "model": FALLBACK_MODEL,
             "size": "1024x1536",
+            "fallback_reason": reason,
             "generated_at": datetime.utcnow().isoformat(),
         }
-        log_status = "FALLBACK_MOCK"
-        log_message = "Asset visual fallback gerado localmente."
+        if limit_status:
+            provider_response["limit"] = limit_status
+        log_status = "FALLBACK_LIMITE" if limit_status else "FALLBACK_MOCK"
+        log_message = (
+            "Limite de OpenAI atingido; asset visual fallback global gerado localmente."
+            if limit_status
+            else "Asset visual fallback gerado localmente."
+        )
 
     asset = CarrosselAsset(
         carrossel_id=carrossel.id,
@@ -284,123 +368,47 @@ def gerar_asset_visual(db: Session, carrossel: Carrossel) -> CarrosselAsset:
     return asset
 
 
-def _prompt_slide_asset(carrossel: Carrossel, slide) -> str:
-    observacao = (slide.observacao_visual or "").strip()
-    titulo_slide = (slide.titulo or f"Slide {slide.numero_slide}").strip()
-    ideia = getattr(carrossel, "ideia_original", "")
-    base = f"""
-Crie uma imagem vertical pensada especificamente para o slide {slide.numero_slide} de um carrossel do Instagram.
-Tema: {carrossel.tema or 'conteúdo profissional'}.
-Título do slide: {titulo_slide}.
-Ideia original: {ideia[:900]}.
-Briefing visual do slide: {observacao or 'visual limpo, abstrato e versátil'}.
-
-Regras obrigatórias:
-- Não inclua texto, letras, números, logotipos ou marcas.
-- Não use pessoas identificáveis.
-- Composição com áreas de respiro para textos.
-- Gere imagens com estética consistente com o tema e variação entre slides.
-""".strip()
-    return base
+def _fallback_provider_response(*, slide, prompt_hash: str, reason: str) -> dict[str, Any]:
+    return {
+        "provider": "local",
+        "mock": True,
+        "model": FALLBACK_MODEL,
+        "size": "1024x1536",
+        "slide_id": getattr(slide, "id", None),
+        "numero_slide": slide.numero_slide,
+        "prompt_hash": prompt_hash,
+        "fallback_reason": reason,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
 
 
 def gerar_asset_visual_slide(db: Session, carrossel: Carrossel, slide) -> CarrosselAsset:
-    """Gera e salva um asset visual específico para um slide (fallback ou OpenAI)."""
     prompt = _prompt_slide_asset(carrossel, slide)
-    version = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-    # filename example: slide-01-asset-20260525...png
-    relative_path = Path("carrosseis") / str(carrossel.id) / "assets" / f"slide-{slide.numero_slide:02d}-asset-{version}.png"
-
-    if openai_image_configurado():
-        _verify_limits(db, carrossel)
+    prompt_hash = _prompt_hash(prompt)
+    reusable = _find_reusable_slide_asset(db, carrossel, slide, prompt_hash)
+    if reusable is not None:
         registrar_log(
             db,
             carrossel_id=carrossel.id,
             etapa="asset_ia",
-            status=ASSET_CALL_STARTED,
-            mensagem="Geração de asset visual por slide com OpenAI iniciada.",
-            detalhes={"slide": slide.numero_slide, "modelo": OPENAI_IMAGE_MODEL, "size": OPENAI_IMAGE_SIZE, "limites": _limites_configurados()},
+            status="REUTILIZADO",
+            mensagem="Asset visual do slide reutilizado.",
+            detalhes={
+                "asset_id": reusable.id,
+                "asset_path": reusable.asset_path,
+                "slide_id": getattr(slide, "id", None),
+                "numero_slide": slide.numero_slide,
+                "prompt_hash": prompt_hash,
+            },
         )
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        response = client.images.generate(
-            model=OPENAI_IMAGE_MODEL,
-            prompt=prompt,
-            size=OPENAI_IMAGE_SIZE,
-            n=1,
-        )
-        content, provider_metadata = _image_response_to_bytes(response)
-        _save_bytes(content, relative_path)
-        revised_prompt = provider_metadata.get("revised_prompt")
-        modelo = OPENAI_IMAGE_MODEL
-        provider_response = {
-            "provider": "openai",
-            "model": OPENAI_IMAGE_MODEL,
-            "size": OPENAI_IMAGE_SIZE,
-            "response": provider_metadata,
-            "generated_at": datetime.utcnow().isoformat(),
-        }
-        log_status = "CONCLUIDO"
-        log_message = "Asset visual por slide com OpenAI concluído."
-    else:
-        # fallback que varia por slide: inclui indicação do número do slide e pequena variação de cor
-        _fallback_image(carrossel, relative_path)
-        # marca visualmente o fallback para diferenciar slides
-        try:
-            storage_root = Path(STORAGE_PATH).resolve()
-            path = storage_root / relative_path
-            with Image.open(path).convert("RGBA") as im:
-                draw = ImageDraw.Draw(im)
-                badge_text = f"Slide {slide.numero_slide}"
-                fnt = _font(40, bold=True)
-                draw.rectangle((40, 40, 300, 100), fill=(34, 80, 60, 180))
-                draw.text((56, 52), badge_text, font=fnt, fill=(255, 255, 255))
-                im.convert("RGB").save(path, format="PNG", optimize=True)
-        except Exception:
-            pass
-        revised_prompt = None
-        modelo = FALLBACK_MODEL
-        provider_response = {
-            "provider": "local",
-            "mock": True,
-            "model": FALLBACK_MODEL,
-            "size": OPENAI_IMAGE_SIZE,
-            "generated_at": datetime.utcnow().isoformat(),
-        }
-        log_status = "FALLBACK_MOCK"
-        log_message = "Asset visual fallback gerado localmente para slide."
+        return reusable
 
-    asset = CarrosselAsset(
-        carrossel_id=carrossel.id,
-        tipo="slide_background",
-        status=ASSET_STATUS_ATIVO,
-        prompt=prompt,
-        revised_prompt=revised_prompt,
-        asset_path=relative_path.as_posix(),
-        asset_url=_public_url(relative_path, version),
-        modelo=modelo,
-        provider_response=provider_response,
-    )
-    db.add(asset)
-    db.flush()
-    registrar_log(
-        db,
-        carrossel_id=carrossel.id,
-        etapa="asset_ia",
-        status=log_status,
-        mensagem=log_message,
-        detalhes={"asset_id": asset.id, "slide": slide.numero_slide, "asset_path": asset.asset_path},
-    )
-    return asset
-
-
-
-def gerar_asset_visual_slide(db: Session, carrossel: Carrossel, slide) -> CarrosselAsset:
-    prompt = _prompt_slide_asset(carrossel, slide)
     version = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
     relative_path = _relative_slide_asset_path(carrossel.id, slide.numero_slide, version)
+    revised_prompt = None
+    limit_status = _image_limit_status(db, carrossel) if openai_image_configurado() else None
 
-    if openai_image_configurado():
-        _verify_limits(db, carrossel)
+    if openai_image_configurado() and limit_status is None:
         registrar_log(
             db,
             carrossel_id=carrossel.id,
@@ -412,6 +420,7 @@ def gerar_asset_visual_slide(db: Session, carrossel: Carrossel, slide) -> Carros
                 "size": OPENAI_IMAGE_SIZE,
                 "slide_id": getattr(slide, "id", None),
                 "numero_slide": slide.numero_slide,
+                "prompt_hash": prompt_hash,
                 "limites": _limites_configurados(),
             },
         )
@@ -432,6 +441,7 @@ def gerar_asset_visual_slide(db: Session, carrossel: Carrossel, slide) -> Carros
             "size": OPENAI_IMAGE_SIZE,
             "slide_id": getattr(slide, "id", None),
             "numero_slide": slide.numero_slide,
+            "prompt_hash": prompt_hash,
             "response": provider_metadata,
             "generated_at": datetime.utcnow().isoformat(),
         }
@@ -439,19 +449,17 @@ def gerar_asset_visual_slide(db: Session, carrossel: Carrossel, slide) -> Carros
         log_message = "Asset visual do slide com OpenAI concluído."
     else:
         _fallback_image(carrossel, relative_path, slide=slide)
-        revised_prompt = None
         modelo = FALLBACK_MODEL
-        provider_response = {
-            "provider": "local",
-            "mock": True,
-            "model": FALLBACK_MODEL,
-            "size": "1024x1536",
-            "slide_id": getattr(slide, "id", None),
-            "numero_slide": slide.numero_slide,
-            "generated_at": datetime.utcnow().isoformat(),
-        }
-        log_status = "FALLBACK_MOCK"
-        log_message = "Asset visual fallback do slide gerado localmente."
+        reason = "limite_openai" if limit_status else "openai_nao_configurado"
+        provider_response = _fallback_provider_response(slide=slide, prompt_hash=prompt_hash, reason=reason)
+        if limit_status:
+            provider_response["limit"] = limit_status
+        log_status = "FALLBACK_LIMITE" if limit_status else "FALLBACK_MOCK"
+        log_message = (
+            "Limite de OpenAI atingido; asset visual fallback do slide gerado localmente."
+            if limit_status
+            else "Asset visual fallback do slide gerado localmente."
+        )
 
     asset = CarrosselAsset(
         carrossel_id=carrossel.id,
@@ -478,6 +486,8 @@ def gerar_asset_visual_slide(db: Session, carrossel: Carrossel, slide) -> Carros
             "asset_path": asset.asset_path,
             "slide_id": getattr(slide, "id", None),
             "numero_slide": slide.numero_slide,
+            "prompt_hash": prompt_hash,
+            "limit": limit_status,
         },
     )
     return asset
