@@ -7,17 +7,17 @@ export function CreateCarrosselForm({ form, onChange, onSubmit, loading }) {
     <form onSubmit={onSubmit} className="panel rounded-md p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-ink">Nova ideia</h2>
-          <p className="text-xs text-ink/55">Título, tema e público serão sugeridos na geração.</p>
+          <h2 className="text-sm font-semibold text-ink">1. Criar ideia</h2>
+          <p className="text-xs text-ink/55">Descreva a base do carrossel. Depois, gere os slides no painel de ações.</p>
         </div>
         <button className="primary-button" disabled={loading || !form.ideia_original.trim()}>
           <Plus className="h-4 w-4" />
-          Criar
+          Criar ideia
         </button>
       </div>
       <label className="mt-4 block">
         <span className="field-label">Ideia original</span>
-        <textarea className="textarea mt-1" value={form.ideia_original} onChange={(event) => update('ideia_original', event.target.value)} placeholder="Descreva a ideia que deve virar carrossel" />
+        <textarea className="textarea mt-1" value={form.ideia_original} onChange={(event) => update('ideia_original', event.target.value)} placeholder="Descreva a ideia central antes de gerar os slides" />
       </label>
       <div className="mt-3 grid gap-3 sm:grid-cols-3">
         <label>

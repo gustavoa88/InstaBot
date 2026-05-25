@@ -28,8 +28,8 @@ export function Workspace({ selected, draft, slideDrafts, onDraftChange, onSlide
               <StatusBadge status={selected.status} />
               <span className="text-xs text-ink/50">#{selected.id}</span>
             </div>
-            <h2 className="text-lg font-semibold text-ink">{selected.titulo || 'Carrossel sem título'}</h2>
-            <p className="mt-1 text-sm text-ink/60">{selected.slides?.length || 0} slides cadastrados</p>
+            <h2 className="text-lg font-semibold text-ink">{selected.titulo || draft.titulo || 'Carrossel sem título'}</h2>
+            <p className="mt-1 text-sm text-ink/60">Revise os dados principais e salve antes de avançar no fluxo.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button className="secondary-button" onClick={onSaveCarrossel} disabled={loading}>
@@ -84,9 +84,14 @@ export function Workspace({ selected, draft, slideDrafts, onDraftChange, onSlide
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold text-ink">Slides</h2>
-            <p className="text-xs text-ink/55">Edite textos, observações visuais e confira previews renderizados</p>
+            <p className="text-xs text-ink/55">Revise textos e observações antes de renderizar os previews.</p>
           </div>
         </div>
+        {Boolean(selected.slides?.length) && (
+          <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
+            Alterações de texto só aparecem no preview depois de salvar e renderizar novamente.
+          </p>
+        )}
         <div className="grid gap-3 xl:grid-cols-2">
           {(selected.slides || []).map((slide) => {
             const draftSlide = slideDrafts[slide.id] || slide;
@@ -135,7 +140,11 @@ export function Workspace({ selected, draft, slideDrafts, onDraftChange, onSlide
             );
           })}
         </div>
-        {!selected.slides?.length && <EmptyState title="Sem slides gerados" description="Use Gerar no painel de ações para criar a estrutura do carrossel." />}
+        {!selected.slides?.length && (
+          <div className="rounded-md border border-dashed border-moss/40 bg-moss/10 p-4">
+            <EmptyState title="Sem slides gerados" description="Use Gerar no painel de ações para criar a estrutura do carrossel." />
+          </div>
+        )}
       </section>
     </main>
   );

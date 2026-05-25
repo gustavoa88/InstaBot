@@ -149,7 +149,7 @@ export default function App() {
       const created = await api.createCarrossel(normalizeCreatePayload(createForm));
       setCreateForm(EMPTY_FORM);
       await loadData(created.id);
-    }, 'Carrossel criado.').catch(() => {});
+    }, 'Ideia criada. Agora gere os slides no painel de ações.').catch(() => {});
   };
 
   const saveCarrossel = () => run(async () => {
@@ -186,7 +186,7 @@ export default function App() {
       brand_name: renderForm.brand_name || null,
       primary_color: renderForm.primary_color || null,
       asset_id: renderForm.use_asset && activeAsset ? activeAsset.id : null,
-    }), 'Slides renderizados.');
+    }), 'Slides renderizados. Agora revise e aprove.');
   };
 
   const schedule = () => run(async () => {
@@ -216,7 +216,7 @@ export default function App() {
       'Regenerar substitui os slides atuais e pode gerar custo se a OpenAI estiver ativa. Deseja continuar?',
     );
     if (!confirmed) return;
-    simpleAction(api.regenerate, 'Slides regenerados.');
+    simpleAction(api.regenerate, 'Slides regenerados. Revise o texto antes de renderizar.');
   };
 
   return (
@@ -225,7 +225,7 @@ export default function App() {
         <div className="mx-auto flex max-w-[1800px] flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-ink">Content Carousel Console</h1>
-            <p className="text-sm text-ink/55">MVP operacional para criar, revisar, aprovar e agendar carrosséis.</p>
+            <p className="text-sm text-ink/55">Crie a ideia, gere slides, revise, renderize e então aprove ou agende.</p>
           </div>
           <form className="flex flex-wrap items-end justify-end gap-2" onSubmit={saveAdminToken}>
             <label className="min-w-[220px]">
@@ -295,7 +295,7 @@ export default function App() {
             onScheduleForm={setScheduleForm}
             onRescheduleForm={(publicationId, next) => setRescheduleForms((current) => ({ ...current, [publicationId]: next }))}
             onRenderForm={setRenderForm}
-            onGenerate={() => simpleAction(api.generate, 'Slides gerados.')}
+            onGenerate={() => simpleAction(api.generate, 'Slides gerados. Revise o texto antes de renderizar.')}
             onRegenerate={regenerateCarrossel}
             onRenderSlides={renderSlides}
             onGenerateAsset={() => simpleAction(api.generateAsset, 'Asset visual gerado.')}
@@ -303,12 +303,12 @@ export default function App() {
               await api.deleteAsset(assetId);
               await loadData(selected.id);
             }, 'Asset visual removido.').catch(() => {})}
-            onApprove={() => simpleAction(api.approve, 'Carrossel aprovado.')}
+            onApprove={() => simpleAction(api.approve, 'Carrossel aprovado. Agora você pode agendar ou publicar teste.')}
             onReject={() => simpleAction(api.reject, 'Carrossel rejeitado.')}
             onSchedule={schedule}
             onReschedule={reschedule}
             onCancelPublication={cancelPublication}
-            onPublishNow={() => simpleAction(api.publishNow, 'Publicação mock concluída.')}
+            onPublishNow={() => simpleAction(api.publishNow, 'Publicação teste concluída.')}
             loading={loading}
           />
           <LogsPanel logs={logs} selectedId={selectedId} />
