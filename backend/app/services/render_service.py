@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.config import PUBLIC_BASE_URL, STORAGE_PATH
 from app.models.carrossel import Carrossel
+from app.services.image_asset_service import gerar_asset_visual_slide
 from app.services.log_service import registrar_log
 
 CANVAS_SIZE = (1080, 1350)
@@ -437,21 +438,26 @@ def renderizar_carrossel_slides(
     asset=None,
 ) -> Carrossel:
     selected_template = _template_name(template)
-    asset_image = _load_asset_image(getattr(asset, "asset_path", None)) if asset is not None else None
-    asset_id = getattr(asset, "id", None) if asset is not None else None
+    global_asset_image = _load_asset_image(getattr(asset, "asset_path", None)) if asset is not None else None
+    global_asset_obj = asset if asset is not None else None
+
     registrar_log(
         db,
         carrossel_id=carrossel.id,
         etapa="renderizacao",
         status="INICIADO",
         mensagem="Renderização determinística dos slides iniciada.",
-        detalhes={"slides": len(carrossel.slides), "template": selected_template, "asset_id": asset_id},
+        detalhes={"slides": len(carrossel.slides), "template": selected_template, "global_asset_id": getattr(global_asset_obj, "id", None)},
     )
 
     storage_root = Path(STORAGE_PATH).resolve()
     version = datetime.utcnow().strftime("%Y%m%d%H%M%S")
 
     for slide in carrossel.slides:
+        # Always generate/load one asset per slide (keeps previews unique per slide)
+        slide_asset_obj = gerar_asset_visual_slide(db, carrossel, slide)
+        slide_asset_image = _load_asset_image(getattr(slide_asset_obj, "asset_path", None))
+
         relative_path = _relative_slide_path(carrossel.id, slide.numero_slide)
         output_path = storage_root / relative_path
         render_options = _render_slide_image(
@@ -461,9 +467,10 @@ def renderizar_carrossel_slides(
             template=selected_template,
             brand_name=brand_name,
             primary_color=primary_color,
-            asset_image=asset_image,
-            asset_id=asset_id,
+            asset_image=slide_asset_image,
+            asset_id=getattr(slide_asset_obj, "id", None),
         )
+
         slide.imagem_path = relative_path.as_posix()
         slide.imagem_url = _public_url(relative_path, version)
         layout_config = slide.layout_config or {}
@@ -474,6 +481,9 @@ def renderizar_carrossel_slides(
             "brand_name": render_options["brand_name"],
             "primary_color": render_options["primary_color"],
             "asset_id": render_options["asset_id"],
+            "slide_asset_id": getattr(slide_asset_obj, "id", None),
+            "slide_asset_path": getattr(slide_asset_obj, "asset_path", None),
+            "slide_asset_prompt": getattr(slide_asset_obj, "prompt", None),
             "canvas": {"width": CANVAS_SIZE[0], "height": CANVAS_SIZE[1]},
             "rendered_at": datetime.utcnow().isoformat(),
         }
@@ -484,6 +494,6 @@ def renderizar_carrossel_slides(
         etapa="renderizacao",
         status="CONCLUIDO",
         mensagem="Renderização determinística dos slides concluída.",
-        detalhes={"slides_renderizados": len(carrossel.slides), "template": selected_template, "asset_id": asset_id},
+        detalhes={"slides_renderizados": len(carrossel.slides), "template": selected_template, "global_asset_id": getattr(global_asset_obj, "id", None)},
     )
     return carrossel
