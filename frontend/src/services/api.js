@@ -1,31 +1,23 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
-const ADMIN_TOKEN_STORAGE_KEY = 'ccp_admin_token';
+const AUTH_TOKEN_STORAGE_KEY = 'ccp_auth_token';
 
-function getAdminToken() {
-  const localToken = localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
-  const envToken = import.meta.env.VITE_ADMIN_TOKEN || '';
-  return localToken || envToken;
+function getAuthToken() {
+  return localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || '';
 }
 
-function setAdminToken(token) {
-  const nextToken = token.trim();
-  if (nextToken) {
-    localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, nextToken);
+function setAuthToken(token) {
+  if (token) {
+    localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
   } else {
-    localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+    localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
   }
 }
 
-const initialEnvToken = import.meta.env.VITE_ADMIN_TOKEN;
-if (initialEnvToken && !localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY)) {
-  setAdminToken(initialEnvToken);
-}
-
 async function request(path, options = {}) {
-  const adminToken = getAdminToken();
+  const authToken = getAuthToken();
   const headers = {
     'Content-Type': 'application/json',
-    ...(adminToken ? { 'X-Admin-Token': adminToken } : {}),
+    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
     ...(options.headers || {}),
   };
 
@@ -42,6 +34,7 @@ async function request(path, options = {}) {
     } catch {
       detail = response.statusText || detail;
     }
+    if (response.status === 401) setAuthToken('');
     throw new Error(Array.isArray(detail) ? detail.map((item) => item.msg).join(', ') : detail);
   }
 
@@ -57,9 +50,21 @@ const json = (method, path, payload) => request(path, {
   body: payload === undefined ? undefined : JSON.stringify(payload),
 });
 
+async function auth(method, path, payload) {
+  const result = await json(method, path, payload);
+  setAuthToken(result.access_token);
+  return result;
+}
+
 export const api = {
-  getAdminToken,
-  setAdminToken,
+  getAuthToken,
+  setAuthToken,
+  login: (payload) => auth('POST', '/auth/login', payload),
+  register: (payload) => auth('POST', '/auth/register', payload),
+  me: () => request('/auth/me'),
+  logout: () => setAuthToken(''),
+  getConfiguracoes: () => request('/configuracoes'),
+  saveConfiguracoes: (payload) => json('PUT', '/configuracoes', payload),
   listCarrosseis: () => request('/carrosseis'),
   getCarrossel: (id) => request(`/carrosseis/${id}`),
   createCarrossel: (payload) => json('POST', '/carrosseis', payload),

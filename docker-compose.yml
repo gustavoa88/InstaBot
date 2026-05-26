@@ -23,6 +23,7 @@ services:
   backend:
     build: ./backend
     container_name: ccp-backend
+    restart: unless-stopped
     working_dir: /app
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     env_file:
@@ -39,6 +40,7 @@ services:
   celery_worker:
     build: ./backend
     container_name: ccp-celery-worker
+    restart: unless-stopped
     working_dir: /app
     command: celery -A app.workers.celery_app.celery_app worker --loglevel=info
     env_file:
@@ -53,6 +55,7 @@ services:
   celery_beat:
     build: ./backend
     container_name: ccp-celery-beat
+    restart: unless-stopped
     working_dir: /app
     command: celery -A app.workers.celery_app.celery_app beat --loglevel=info
     env_file:
@@ -67,11 +70,11 @@ services:
   frontend:
     build: ./frontend
     container_name: ccp-frontend
+    restart: unless-stopped
     working_dir: /app
     command: npm run dev
     environment:
       VITE_API_PROXY_TARGET: http://backend:8000
-      VITE_ADMIN_TOKEN: ${ADMIN_API_TOKEN:-dev-admin-token}
     ports:
       - "${APP_BIND_HOST:-127.0.0.1}:5173:5173"
     volumes:

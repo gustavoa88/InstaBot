@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, KeyRound, Loader2 } from 'lucide-react';
+import { AlertTriangle, Loader2, LogOut, Settings } from 'lucide-react';
 import { ActionPanel } from './components/ActionPanel.jsx';
+import { AuthScreen } from './components/AuthScreen.jsx';
 import { CarrosselList } from './components/CarrosselList.jsx';
 import { CreateCarrosselForm } from './components/CreateCarrosselForm.jsx';
 import { LogsPanel } from './components/LogsPanel.jsx';
+import { SettingsPanel } from './components/SettingsPanel.jsx';
 import { Workspace } from './components/Workspace.jsx';
 import { api } from './services/api.js';
 
@@ -68,7 +70,12 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [adminTokenInput, setAdminTokenInput] = useState(() => api.getAdminToken());
+  const [user, setUser] = useState(null);
+  const [checkingAuth, setCheckingAuth] = useState(Boolean(api.getAuthToken()));
+  const [authError, setAuthError] = useState('');
+  const [config, setConfig] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsForm, setSettingsForm] = useState({});
 
   const selected = useMemo(
     () => carrosseis.find((item) => item.id === selectedId) || null,
@@ -109,7 +116,22 @@ export default function App() {
   };
 
   useEffect(() => {
-    run(() => loadData(null)).catch(() => {});
+    if (!api.getAuthToken()) {
+      setCheckingAuth(false);
+      return;
+    }
+    api.me()
+      .then(async (currentUser) => {
+        setUser(currentUser);
+        const currentConfig = await api.getConfiguracoes();
+        setConfig(currentConfig);
+        await loadData(null);
+      })
+      .catch(() => {
+        api.logout();
+        setUser(null);
+      })
+      .finally(() => setCheckingAuth(false));
   }, []);
 
   useEffect(() => {
@@ -136,11 +158,43 @@ export default function App() {
 
   const refresh = () => run(() => loadData(selectedId), 'Dados atualizados.').catch(() => {});
 
-  const saveAdminToken = (event) => {
+  const submitAuth = (mode, payload) => {
+    setLoading(true);
+    setAuthError('');
+    const action = mode === 'register' ? api.register : api.login;
+    action(payload)
+      .then(async (result) => {
+        setUser(result.usuario);
+        const currentConfig = await api.getConfiguracoes();
+        setConfig(currentConfig);
+        await loadData(null);
+      })
+      .catch((err) => setAuthError(err.message || 'Falha ao autenticar.'))
+      .finally(() => setLoading(false));
+  };
+
+  const logout = () => {
+    api.logout();
+    setUser(null);
+    setCarrosseis([]);
+    setLogs([]);
+    setSelectedId(null);
+  };
+
+  const openSettings = () => {
+    setSettingsForm({});
+    setSettingsOpen(true);
+  };
+
+  const saveSettings = (event) => {
     event.preventDefault();
-    api.setAdminToken(adminTokenInput);
-    setAdminTokenInput(api.getAdminToken());
-    showNotice('Token admin atualizado.');
+    const payload = Object.fromEntries(Object.entries(settingsForm).filter(([, value]) => value !== undefined));
+    run(async () => {
+      const currentConfig = await api.saveConfiguracoes(payload);
+      setConfig(currentConfig);
+      setSettingsForm({});
+      setSettingsOpen(false);
+    }, 'Configurações salvas.').catch(() => {});
   };
 
   const createCarrossel = (event) => {
@@ -219,6 +273,14 @@ export default function App() {
     simpleAction(api.regenerate, 'Slides regenerados. Revise o texto antes de renderizar.');
   };
 
+  if (checkingAuth) {
+    return <div className="flex min-h-screen items-center justify-center bg-paper text-sm text-ink/60">Carregando sessão...</div>;
+  }
+
+  if (!user) {
+    return <AuthScreen onLogin={submitAuth} loading={loading} error={authError} />;
+  }
+
   return (
     <div className="min-h-screen bg-paper text-ink">
       <header className="border-b border-line bg-white px-4 py-3">
@@ -227,29 +289,35 @@ export default function App() {
             <h1 className="text-lg font-semibold text-ink">Content Carousel Console</h1>
             <p className="text-sm text-ink/55">Crie a ideia, gere slides, revise, renderize e então aprove ou agende.</p>
           </div>
-          <form className="flex flex-wrap items-end justify-end gap-2" onSubmit={saveAdminToken}>
-            <label className="min-w-[220px]">
-              <span className="field-label">Token admin</span>
-              <input
-                className="input mt-1"
-                type="password"
-                value={adminTokenInput}
-                onChange={(event) => setAdminTokenInput(event.target.value)}
-                placeholder="ccp_admin_token"
-                autoComplete="off"
-              />
-            </label>
-            <button className="secondary-button" type="submit" disabled={loading}>
-              <KeyRound className="h-4 w-4" />
-              Salvar token
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="text-right text-sm text-ink/60">
+              <div className="font-semibold text-ink">{user.nome}</div>
+              <div>{config?.openai_configurado ? 'OpenAI configurada' : 'OpenAI pendente'} · {config?.instagram_configurado ? 'Instagram configurado' : 'Instagram pendente'}</div>
+            </div>
+            <button className="secondary-button" type="button" onClick={openSettings}>
+              <Settings className="h-4 w-4" /> Configurações
+            </button>
+            <button className="secondary-button" type="button" onClick={logout}>
+              <LogOut className="h-4 w-4" /> Sair
             </button>
             <div className="flex items-center gap-2 text-sm text-ink/60">
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
               <span>{loading ? 'Processando' : 'Pronto'}</span>
             </div>
-          </form>
+          </div>
         </div>
       </header>
+
+      {settingsOpen && (
+        <SettingsPanel
+          config={config}
+          form={settingsForm}
+          onChange={setSettingsForm}
+          onClose={() => setSettingsOpen(false)}
+          onSubmit={saveSettings}
+          loading={loading}
+        />
+      )}
 
       <div className="mx-auto grid max-w-[1800px] gap-4 p-4 xl:grid-cols-[320px_minmax(0,1fr)_360px]">
         <CarrosselList

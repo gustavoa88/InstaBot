@@ -32,10 +32,40 @@ CARROSSEL_STATUS = {
 }
 
 
+class Usuario(Base):
+    __tablename__ = "usuario"
+
+    id = Column(BigInteger, primary_key=True, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    nome = Column(String(150), nullable=False)
+    senha_hash = Column(Text, nullable=False)
+    is_admin = Column(Boolean, default=False, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    configuracao = relationship("UsuarioConfiguracao", back_populates="usuario", uselist=False, cascade="all, delete-orphan")
+    carrosseis = relationship("Carrossel", back_populates="usuario", cascade="all, delete-orphan")
+
+
+class UsuarioConfiguracao(Base):
+    __tablename__ = "usuario_configuracao"
+
+    usuario_id = Column(BigInteger, ForeignKey("usuario.id", ondelete="CASCADE"), primary_key=True)
+    openai_api_key_encrypted = Column(Text)
+    instagram_access_token_encrypted = Column(Text)
+    instagram_user_id_encrypted = Column(Text)
+    facebook_page_id_encrypted = Column(Text)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    usuario = relationship("Usuario", back_populates="configuracao")
+
+
 class Carrossel(Base):
     __tablename__ = "carrossel"
 
     id = Column(BigInteger, primary_key=True, index=True)
+    usuario_id = Column(BigInteger, ForeignKey("usuario.id", ondelete="CASCADE"), nullable=False, index=True)
 
     titulo = Column(String(200))
     ideia_original = Column(Text, nullable=False)
@@ -83,6 +113,7 @@ class Carrossel(Base):
         back_populates="carrossel",
         cascade="all, delete-orphan",
     )
+    usuario = relationship("Usuario", back_populates="carrosseis")
 
 
 class CarrosselAsset(Base):

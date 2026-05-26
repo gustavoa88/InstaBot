@@ -18,6 +18,7 @@ export function Workspace({ selected, draft, slideDrafts, onDraftChange, onSlide
   }
 
   const updateDraft = (field, value) => onDraftChange({ ...draft, [field]: value });
+  const slideOptions = Array.from({ length: 7 }, (_, index) => index + 1);
 
   return (
     <main className="flex min-h-0 flex-col gap-4 overflow-y-auto">
@@ -61,7 +62,11 @@ export function Workspace({ selected, draft, slideDrafts, onDraftChange, onSlide
           </label>
           <label>
             <span className="field-label">Quantidade de slides</span>
-            <input className="input mt-1" type="number" min="1" max="20" value={draft.quantidade_slides || 1} onChange={(event) => updateDraft('quantidade_slides', event.target.value)} />
+            <select className="input mt-1" value={draft.quantidade_slides || 1} onChange={(event) => updateDraft('quantidade_slides', Number(event.target.value))}>
+              {slideOptions.map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
           </label>
           <label>
             <span className="field-label">Hashtags</span>
