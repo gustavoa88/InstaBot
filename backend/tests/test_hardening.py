@@ -131,94 +131,52 @@ def test_global_image_asset_falls_back_when_openai_limit_is_reached(tmp_path, mo
     assert (tmp_path / asset.asset_path).exists()
 
 
-def test_render_service_creates_relative_png_and_metadata(tmp_path, monkeypatch):
+def test_render_service_rejects_selected_asset_in_openai_only_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
     monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
-    monkeypatch.setattr(image_asset_service, "STORAGE_PATH", str(tmp_path))
-    monkeypatch.setattr(image_asset_service, "PUBLIC_BASE_URL", "")
-    monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "")
-    carrossel, slide = _fake_carrossel()
-
-    asset_path = tmp_path / "carrosseis/10/assets/asset-test.png"
-    asset_path.parent.mkdir(parents=True)
-    Image.new("RGB", (1024, 1536), (40, 80, 120)).save(asset_path)
+    carrossel, _slide = _fake_carrossel()
     asset = SimpleNamespace(id=99, asset_path="carrosseis/10/assets/asset-test.png")
 
-    render_service.renderizar_carrossel_slides(
-        FakeDb(),
-        carrossel,
-        template="clean_editorial",
-        brand_name="InstaBot",
-        primary_color="#336699",
-        asset=asset,
-    )
-
-    assert slide.imagem_path == "carrosseis/10/slides/slide-01.png"
-    assert slide.imagem_url.startswith("/storage/carrosseis/10/slides/slide-01.png?v=")
-    assert slide.layout_config["renderer"] == "pillow"
-    assert slide.layout_config["template"] == "clean_editorial"
-    assert slide.layout_config["brand_name"] == "InstaBot"
-    assert slide.layout_config["primary_color"] == "#336699"
-    assert slide.layout_config["asset_id"] != 99
-    assert slide.layout_config["slide_asset_path"].startswith("carrosseis/10/assets/slide-01-asset-")
-    assert "Briefing visual simples" in slide.layout_config["slide_asset_prompt"]
-    rendered = tmp_path / slide.imagem_path
-    assert rendered.exists()
-    assert rendered.read_bytes().startswith(b"\x89PNG")
-    with Image.open(rendered) as image:
-        assert image.size == (1080, 1350)
-
-
-def test_clean_editorial_uses_slide_asset_as_large_hero(tmp_path, monkeypatch):
-    monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
-    monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
-    monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "")
-    carrossel, slide = _fake_carrossel(template_id=18)
-    asset_path = tmp_path / "carrosseis/18/assets/slide-blue.png"
-    asset_path.parent.mkdir(parents=True)
-    Image.new("RGB", (1024, 1536), (18, 74, 190)).save(asset_path)
-
-    def fake_slide_asset(*_args, **_kwargs):
-        return SimpleNamespace(
-            id=501,
-            asset_path="carrosseis/18/assets/slide-blue.png",
-            prompt="Briefing visual simples com azul editorial.",
-            provider_response={"prompt_hash": "blue-hero"},
+    with pytest.raises(HTTPException) as exc_info:
+        render_service.renderizar_carrossel_slides(
+            FakeDb(),
+            carrossel,
+            template="clean_editorial",
+            brand_name="InstaBot",
+            primary_color="#336699",
+            asset=asset,
+            api_key="test-key",
         )
 
-    monkeypatch.setattr(render_service, "gerar_asset_visual_slide", fake_slide_asset)
+    assert exc_info.value.status_code == 409
+    assert "asset selecionado" in exc_info.value.detail
 
-    render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial", primary_color="#336699")
+def test_render_service_requires_openai_key_in_openai_only_mode(tmp_path, monkeypatch):
+    monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
+    carrossel, _slide = _fake_carrossel(template_id=18)
 
-    with Image.open(tmp_path / slide.imagem_path) as image:
-        assert image.size == (1080, 1350)
-        red, green, blue = image.getpixel((540, 260))
-        assert blue > red
-        assert blue > green
+    with pytest.raises(HTTPException) as exc_info:
+        render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial")
 
+    assert exc_info.value.status_code == 409
+    assert "OPENAI_API_KEY" in exc_info.value.detail
 
 @pytest.mark.parametrize("template", ["clean_editorial", "bold_contrast", "soft_brand"])
 def test_render_service_supports_visual_templates(tmp_path, monkeypatch, template):
     monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
     monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
-    monkeypatch.setattr(image_asset_service, "STORAGE_PATH", str(tmp_path))
-    monkeypatch.setattr(image_asset_service, "PUBLIC_BASE_URL", "")
-    monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "")
-    carrossel, slide = _fake_carrossel(template_id=20)
+    carrossel, _slide = _fake_carrossel(template_id=20)
 
-    render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template=template)
+    with pytest.raises(HTTPException) as exc_info:
+        render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template=template)
 
-    assert slide.layout_config["template"] == template
-    with Image.open(tmp_path / slide.imagem_path) as image:
-        assert image.size == (1080, 1350)
+    assert exc_info.value.status_code == 409
+    assert "OPENAI_API_KEY" in exc_info.value.detail
 
-
-def test_render_service_generates_distinct_fallback_asset_per_slide(tmp_path, monkeypatch):
+def test_render_service_does_not_generate_local_slide_assets_without_openai(tmp_path, monkeypatch):
     monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
     monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
-    monkeypatch.setattr(image_asset_service, "STORAGE_PATH", str(tmp_path))
-    monkeypatch.setattr(image_asset_service, "PUBLIC_BASE_URL", "")
-    monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "")
     carrossel, first_slide = _fake_carrossel(template_id=40)
     second_slide = SimpleNamespace(
         id=2,
@@ -235,39 +193,23 @@ def test_render_service_generates_distinct_fallback_asset_per_slide(tmp_path, mo
     carrossel.slides = [first_slide, second_slide]
     db = FakeDb()
 
-    render_service.renderizar_carrossel_slides(db, carrossel, template="clean_editorial")
+    with pytest.raises(HTTPException) as exc_info:
+        render_service.renderizar_carrossel_slides(db, carrossel, template="clean_editorial")
 
-    first_asset = tmp_path / first_slide.layout_config["slide_asset_path"]
-    second_asset = tmp_path / second_slide.layout_config["slide_asset_path"]
-    assert first_slide.layout_config["slide_asset_path"] != second_slide.layout_config["slide_asset_path"]
-    assert first_slide.layout_config["slide_asset_prompt_hash"] != second_slide.layout_config["slide_asset_prompt_hash"]
-    assert "Briefing visual simples" in first_slide.layout_config["slide_asset_prompt"]
-    assert "formas diagonais" in second_slide.layout_config["slide_asset_prompt"]
-    assert first_asset.exists()
-    assert second_asset.exists()
-    assert first_asset.read_bytes() != second_asset.read_bytes()
+    assert exc_info.value.status_code == 409
+    assert not [item for item in db.added if getattr(item, "tipo", None) == "slide_background"]
 
-
-def test_render_service_reuses_slide_asset_when_prompt_is_unchanged(tmp_path, monkeypatch):
+def test_render_service_rejects_asset_instead_of_using_pillow_renderer(tmp_path, monkeypatch):
     monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
     monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
-    monkeypatch.setattr(image_asset_service, "STORAGE_PATH", str(tmp_path))
-    monkeypatch.setattr(image_asset_service, "PUBLIC_BASE_URL", "")
-    monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "")
-    carrossel, slide = _fake_carrossel(template_id=41)
-    db = FakeDb()
+    carrossel, _slide = _fake_carrossel(template_id=41)
+    asset = SimpleNamespace(id=501, asset_path="carrosseis/41/assets/slide-blue.png")
 
-    render_service.renderizar_carrossel_slides(db, carrossel, template="clean_editorial")
-    assets_after_first_render = [item for item in db.added if getattr(item, "tipo", None) == "slide_background"]
-    first_asset_id = slide.layout_config["slide_asset_id"]
+    with pytest.raises(HTTPException) as exc_info:
+        render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial", asset=asset, api_key="test-key")
 
-    render_service.renderizar_carrossel_slides(db, carrossel, template="clean_editorial")
-    assets_after_second_render = [item for item in db.added if getattr(item, "tipo", None) == "slide_background"]
-
-    assert len(assets_after_first_render) == 1
-    assert len(assets_after_second_render) == 1
-    assert slide.layout_config["slide_asset_id"] == first_asset_id
-
+    assert exc_info.value.status_code == 409
+    assert "OpenAI-only" in exc_info.value.detail
 
 def test_slide_asset_generation_falls_back_when_openai_limit_is_reached(tmp_path, monkeypatch):
     monkeypatch.setattr(image_asset_service, "STORAGE_PATH", str(tmp_path))
@@ -286,7 +228,7 @@ def test_slide_asset_generation_falls_back_when_openai_limit_is_reached(tmp_path
     assert (tmp_path / asset.asset_path).exists()
 
 
-def test_render_service_finishes_with_slide_fallback_when_openai_limit_is_reached(tmp_path, monkeypatch):
+def test_render_service_aborts_when_openai_image_limit_is_reached(tmp_path, monkeypatch):
     monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
     monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
     monkeypatch.setattr(image_asset_service, "STORAGE_PATH", str(tmp_path))
@@ -309,13 +251,14 @@ def test_render_service_finishes_with_slide_fallback_when_openai_limit_is_reache
     )
     carrossel.slides = [first_slide, second_slide]
 
-    render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial")
+    with pytest.raises(HTTPException) as exc_info:
+        render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial")
 
-    assert first_slide.layout_config["slide_asset_path"] != second_slide.layout_config["slide_asset_path"]
-    assert (tmp_path / first_slide.layout_config["slide_asset_path"]).exists()
-    assert (tmp_path / second_slide.layout_config["slide_asset_path"]).exists()
-    assert (tmp_path / first_slide.imagem_path).exists()
-    assert (tmp_path / second_slide.imagem_path).exists()
+    assert exc_info.value.status_code == 429
+    assert "Limite de geração de imagem da OpenAI atingido" in exc_info.value.detail
+    assert first_slide.imagem_path is None
+    assert second_slide.imagem_path is None
+    assert not (tmp_path / "carrosseis/43/slides").exists()
 
 
 def _png_b64(color):
@@ -323,6 +266,17 @@ def _png_b64(color):
     Image.new("RGB", (1024, 1536), color).save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
+
+def test_openai_full_slide_save_preserves_provider_bytes(tmp_path):
+    buffer = BytesIO()
+    Image.new("RGB", (1024, 1536), (30, 60, 90)).save(buffer, format="PNG")
+    output = tmp_path / "openai-slide.png"
+
+    render_service._save_full_slide_bytes(buffer.getvalue(), output)
+
+    assert output.read_bytes() == buffer.getvalue()
+    with Image.open(output) as rendered:
+        assert rendered.size == (1024, 1536)
 
 def test_render_service_uses_openai_full_slide_for_each_slide(tmp_path, monkeypatch):
     monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
@@ -364,7 +318,7 @@ def test_render_service_uses_openai_full_slide_for_each_slide(tmp_path, monkeypa
     carrossel.publico_alvo = "Entusiastas de carros clássicos"
     carrossel.tom = "histórico e nostálgico"
 
-    render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial")
+    render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial", usuario=SimpleNamespace(is_admin=True))
 
     assert len(calls) == 2
     assert first_slide.layout_config["renderer"] == "openai_full_slide"
@@ -374,25 +328,93 @@ def test_render_service_uses_openai_full_slide_for_each_slide(tmp_path, monkeypa
     assert "Foto antiga do primeiro Fusca" in second_slide.layout_config["image_prompt"]
     assert first_slide.layout_config["slide_asset_path"] is None
     assert second_slide.layout_config["slide_asset_path"] is None
+    prompt = first_slide.layout_config["image_prompt"]
+    assert "titulo:" in prompt
+    assert "texto_principal:" in prompt
+    assert "texto_secundario:" in prompt
+    assert "observacao_visual:" in prompt
+    assert "Renderize o titulo, texto_principal e texto_secundario" in prompt
+    assert "do not include text" not in prompt.lower()
     first_render = tmp_path / first_slide.imagem_path
     second_render = tmp_path / second_slide.imagem_path
     assert first_render.exists()
     assert second_render.exists()
     assert first_render.read_bytes() != second_render.read_bytes()
     with Image.open(first_render) as image:
-        assert image.size == (1080, 1350)
+        assert image.size == (1024, 1536)
 
 
-def test_render_service_falls_back_to_pillow_when_openai_full_slide_fails(tmp_path, monkeypatch):
+def test_render_service_aborts_without_partial_updates_when_openai_key_is_invalid(tmp_path, monkeypatch):
     monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
     monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
     monkeypatch.setattr(render_service, "OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(render_service, "_image_limit_status", lambda *_args, **_kwargs: None)
 
+    class FakeOpenAIError(Exception):
+        status_code = 401
+
+    class FakeImages:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return SimpleNamespace(data=[SimpleNamespace(b64_json=_png_b64((30, 120, 200)))])
+            raise FakeOpenAIError("Incorrect API key provided: sk-secret")
+
+    class FakeOpenAI:
+        images = FakeImages()
+
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+    monkeypatch.setattr(render_service, "OpenAI", FakeOpenAI)
+    carrossel, first_slide = _fake_carrossel(template_id=45)
+    second_slide = SimpleNamespace(
+        id=2,
+        carrossel_id=45,
+        numero_slide=2,
+        titulo="Segundo slide",
+        texto_principal="Texto que não deve ser parcialmente renderizado.",
+        texto_secundario="",
+        observacao_visual="Cena editorial de validação.",
+        imagem_path="carrosseis/45/slides/slide-02-old.png",
+        imagem_url="/storage/carrosseis/45/slides/slide-02-old.png",
+        layout_config={"renderer": "old"},
+    )
+    first_slide.imagem_path = "carrosseis/45/slides/slide-01-old.png"
+    first_slide.imagem_url = "/storage/carrosseis/45/slides/slide-01-old.png"
+    first_slide.layout_config = {"renderer": "old"}
+    carrossel.slides = [first_slide, second_slide]
+
+    with pytest.raises(HTTPException) as exc_info:
+        render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial")
+
+    assert exc_info.value.status_code == 401
+    assert "Chave OpenAI inválida ou expirada" in exc_info.value.detail
+    assert "Incorrect API key provided" in exc_info.value.detail
+    assert "sk-secret" not in exc_info.value.detail
+    assert first_slide.layout_config == {"renderer": "old"}
+    assert second_slide.layout_config == {"renderer": "old"}
+    assert first_slide.imagem_path == "carrosseis/45/slides/slide-01-old.png"
+    assert not list((tmp_path / "carrosseis/45/slides").glob("*.tmp.png"))
+
+
+def test_openai_429_error_detail_is_returned_in_banner_message(tmp_path, monkeypatch):
+    monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(render_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(render_service, "_image_limit_status", lambda *_args, **_kwargs: None)
+
+    class FakeOpenAIRateLimit(Exception):
+        status_code = 429
+
     class FakeImages:
         def generate(self, **_kwargs):
-            raise RuntimeError("image api unavailable")
+            raise FakeOpenAIRateLimit("Rate limit reached for gpt-image-1-mini in organization org_test. Please try again in 20s.")
 
     class FakeOpenAI:
         def __init__(self, api_key):
@@ -400,15 +422,107 @@ def test_render_service_falls_back_to_pillow_when_openai_full_slide_fails(tmp_pa
             self.images = FakeImages()
 
     monkeypatch.setattr(render_service, "OpenAI", FakeOpenAI)
-    carrossel, slide = _fake_carrossel(template_id=45)
+    carrossel, _slide = _fake_carrossel(template_id=47)
 
-    render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial")
+    with pytest.raises(HTTPException) as exc_info:
+        render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial")
 
-    assert slide.layout_config["renderer"] == "pillow"
-    assert slide.layout_config["fallback_reason"] == "erro_openai"
-    assert slide.layout_config["fallback_error"] == "image api unavailable"
+    assert exc_info.value.status_code == 429
+    assert "Limite de geração de imagem da OpenAI atingido" in exc_info.value.detail
+    assert "Rate limit reached for gpt-image-1-mini" in exc_info.value.detail
+
+
+def test_render_service_retries_transient_openai_full_slide_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(render_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(render_service, "_image_limit_status", lambda *_args, **_kwargs: None)
+    calls = []
+
+    class FakeImages:
+        def generate(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise RuntimeError("temporary outage")
+            return SimpleNamespace(data=[SimpleNamespace(b64_json=_png_b64((80, 170, 110)))])
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            self.api_key = api_key
+            self.images = FakeImages()
+
+    monkeypatch.setattr(render_service, "OpenAI", FakeOpenAI)
+    carrossel, slide = _fake_carrossel(template_id=46)
+
+    render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial", usuario=SimpleNamespace(is_admin=True))
+
+    assert len(calls) == 2
+    assert slide.layout_config["renderer"] == "openai_full_slide"
     assert (tmp_path / slide.imagem_path).exists()
 
+
+def test_image_limits_are_per_user_and_admin_has_higher_daily_limit(monkeypatch):
+    carrossel, _slide = _fake_carrossel(template_id=91)
+    carrossel.usuario_id = 10
+    normal_user = SimpleNamespace(id=10, is_admin=False)
+    admin_user = SimpleNamespace(id=10, is_admin=True)
+    seen_usuario_ids = []
+
+    monkeypatch.setattr(image_asset_service, "OPENAI_IMAGE_DAILY_REQUEST_LIMIT", 1)
+    monkeypatch.setattr(image_asset_service, "OPENAI_IMAGE_ADMIN_DAILY_REQUEST_LIMIT", 100)
+    monkeypatch.setattr(image_asset_service, "OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT", 7)
+
+    def fake_count(*_args, **kwargs):
+        seen_usuario_ids.append(kwargs.get("usuario_id"))
+        return 1 if kwargs.get("desde") is not None else 0
+
+    monkeypatch.setattr(image_asset_service, "_count_openai_image_calls", fake_count)
+
+    normal_status = image_asset_service._image_limit_status(FakeDb(), carrossel, usuario=normal_user)
+    admin_status = image_asset_service._image_limit_status(FakeDb(), carrossel, usuario=admin_user)
+
+    assert normal_status == {"escopo": "diário", "limite": 1, "chamadas": 1}
+    assert admin_status is None
+    assert seen_usuario_ids == [normal_user.id]
+
+
+def test_text_limits_are_per_user_and_admin_has_higher_daily_limit(monkeypatch):
+    carrossel, _slide = _fake_carrossel(template_id=92)
+    carrossel.usuario_id = 11
+    normal_user = SimpleNamespace(id=11, is_admin=False)
+    admin_user = SimpleNamespace(id=11, is_admin=True)
+    seen_usuario_ids = []
+
+    monkeypatch.setattr(ai_service, "OPENAI_DAILY_REQUEST_LIMIT", 1)
+    monkeypatch.setattr(ai_service, "OPENAI_ADMIN_DAILY_REQUEST_LIMIT", 100)
+    monkeypatch.setattr(ai_service, "OPENAI_CARROSSEL_REQUEST_LIMIT", 3)
+
+    def fake_count(*_args, **kwargs):
+        seen_usuario_ids.append(kwargs.get("usuario_id"))
+        return 1 if kwargs.get("desde") is not None else 0
+
+    monkeypatch.setattr(ai_service, "_contar_chamadas_openai", fake_count)
+
+    with pytest.raises(HTTPException) as exc_info:
+        ai_service._verificar_limites(FakeDb(), carrossel, usuario=normal_user)
+
+    assert exc_info.value.status_code == 429
+    assert "(1/1)" in exc_info.value.detail
+    ai_service._verificar_limites(FakeDb(), carrossel, usuario=admin_user)
+    assert seen_usuario_ids[:2] == [normal_user.id, admin_user.id]
+
+
+def test_image_limits_are_temporarily_disabled_for_admin(monkeypatch):
+    carrossel, _slide = _fake_carrossel(template_id=93)
+    admin_user = SimpleNamespace(id=12, is_admin=True)
+
+    monkeypatch.setattr(image_asset_service, "OPENAI_IMAGE_DAILY_REQUEST_LIMIT", 1)
+    monkeypatch.setattr(image_asset_service, "OPENAI_IMAGE_ADMIN_DAILY_REQUEST_LIMIT", 100)
+    monkeypatch.setattr(image_asset_service, "OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT", 7)
+    monkeypatch.setattr(image_asset_service, "_count_openai_image_calls", lambda *_args, **_kwargs: 999)
+
+    assert image_asset_service._image_limit_status(FakeDb(), carrossel, usuario=admin_user) is None
 
 def test_frontend_uses_only_global_background_asset_for_render():
     app_source = Path("frontend/src/App.jsx").read_text()
@@ -416,6 +530,83 @@ def test_frontend_uses_only_global_background_asset_for_render():
 
     assert "asset.tipo === 'background'" in app_source
     assert "asset.tipo === 'background'" in panel_source
+
+
+def test_openai_text_generation_401_returns_clear_sanitized_error(monkeypatch):
+    class FakeOpenAIAuthError(Exception):
+        status_code = 401
+
+    class FakeResponses:
+        def create(self, **_kwargs):
+            raise FakeOpenAIAuthError("Incorrect API key provided: sk-secret")
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            self.api_key = api_key
+            self.responses = FakeResponses()
+
+    carrossel = SimpleNamespace(
+        id=81,
+        titulo="Titulo inicial",
+        ideia_original="Ideia original para o carrossel",
+        tema="Tema inicial",
+        tom="pratico",
+        publico_alvo="Profissionais solo",
+        prompt_config={},
+        quantidade_slides=2,
+        slides=[],
+        status="RASCUNHO",
+    )
+
+    monkeypatch.setattr(ai_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(ai_service, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(ai_service, "_verificar_limites", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        ai_service.gerar_carrossel_com_openai(FakeDb(), carrossel)
+
+    assert exc_info.value.status_code == 401
+    assert "Chave OpenAI inválida ou expirada" in exc_info.value.detail
+    assert "Incorrect API key provided" in exc_info.value.detail
+    assert "sk-secret" not in exc_info.value.detail
+
+
+def test_openai_text_generation_429_returns_openai_detail(monkeypatch):
+    class FakeOpenAIRateLimit(Exception):
+        status_code = 429
+
+    class FakeResponses:
+        def create(self, **_kwargs):
+            raise FakeOpenAIRateLimit("Rate limit reached for gpt-5-mini. Try again in 10s.")
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            self.api_key = api_key
+            self.responses = FakeResponses()
+
+    carrossel = SimpleNamespace(
+        id=82,
+        titulo="Titulo inicial",
+        ideia_original="Ideia original para o carrossel",
+        tema="Tema inicial",
+        tom="pratico",
+        publico_alvo="Profissionais solo",
+        prompt_config={},
+        quantidade_slides=2,
+        slides=[],
+        status="RASCUNHO",
+    )
+
+    monkeypatch.setattr(ai_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(ai_service, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(ai_service, "_verificar_limites", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        ai_service.gerar_carrossel_com_openai(FakeDb(), carrossel)
+
+    assert exc_info.value.status_code == 429
+    assert "Limite de geração textual da OpenAI atingido" in exc_info.value.detail
+    assert "Rate limit reached for gpt-5-mini" in exc_info.value.detail
 
 
 def test_openai_generation_creates_slides_and_updates_status(monkeypatch):

@@ -10,7 +10,7 @@ class CarrosselCreate(BaseModel):
     tema: str | None = Field(default=None, max_length=100)
     tom: str | None = Field(default=None, max_length=100)
     publico_alvo: str | None = Field(default=None, max_length=150)
-    quantidade_slides: int = Field(default=7, ge=1, le=20)
+    quantidade_slides: int = Field(default=7, ge=1, le=7)
     observacoes_adicionais: str | None = Field(default=None, max_length=1000)
 
 
@@ -20,7 +20,7 @@ class CarrosselUpdate(BaseModel):
     tema: str | None = Field(default=None, max_length=100)
     tom: str | None = Field(default=None, max_length=100)
     publico_alvo: str | None = Field(default=None, max_length=150)
-    quantidade_slides: int | None = Field(default=None, ge=1, le=20)
+    quantidade_slides: int | None = Field(default=None, ge=1, le=7)
     legenda: str | None = Field(default=None, max_length=5000)
     hashtags: list[str] | None = Field(default=None, max_length=30)
     prompt_config: dict[str, Any] | None = None
@@ -145,3 +145,46 @@ class CarrosselRead(BaseModel):
     slides: list[SlideRead] = Field(default_factory=list)
     publicacoes: list[PublicacaoRead] = Field(default_factory=list)
     assets: list[AssetVisualRead] = Field(default_factory=list)
+
+
+class UsuarioRegister(BaseModel):
+    nome: str = Field(min_length=1, max_length=150)
+    email: str = Field(min_length=5, max_length=255)
+    password: str = Field(min_length=8, max_length=200)
+
+
+class UsuarioLogin(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class UsuarioRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: str
+    nome: str
+    is_admin: bool
+    created_at: datetime
+
+
+class TokenRead(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    usuario: UsuarioRead
+
+
+class ConfiguracaoUpdate(BaseModel):
+    openai_api_key: str | None = Field(default=None, max_length=500)
+    instagram_access_token: str | None = Field(default=None, max_length=1000)
+    instagram_user_id: str | None = Field(default=None, max_length=100)
+    facebook_page_id: str | None = Field(default=None, max_length=100)
+
+
+class ConfiguracaoRead(BaseModel):
+    openai_configurado: bool
+    instagram_configurado: bool
+    openai_api_key_masked: str | None = None
+    instagram_access_token_masked: str | None = None
+    instagram_user_id_masked: str | None = None
+    facebook_page_id_masked: str | None = None

@@ -1,3 +1,4 @@
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.carrossel import (
@@ -92,18 +93,18 @@ def gerar_carrossel_mockado(db: Session, carrossel: Carrossel, *, regenerar: boo
     return carrossel
 
 
-def gerar_carrossel_textual(db: Session, carrossel: Carrossel, *, regenerar: bool = False) -> Carrossel:
+def gerar_carrossel_textual(db: Session, carrossel: Carrossel, *, credentials, regenerar: bool = False, usuario=None) -> Carrossel:
     from app.services.ai_service import gerar_carrossel_com_openai, openai_configurado
 
-    if not openai_configurado():
+    if not openai_configurado(credentials.openai_api_key):
         registrar_log(
             db,
             carrossel_id=carrossel.id,
             etapa="geracao_ia",
-            status="FALLBACK_MOCK",
-            mensagem="OPENAI_API_KEY não configurada; usando geração mockada.",
+            status="BLOQUEADO_CONFIG",
+            mensagem="Chave OpenAI não configurada para o usuário.",
             detalhes={"regenerar": regenerar},
         )
-        return gerar_carrossel_mockado(db, carrossel, regenerar=regenerar)
+        raise HTTPException(status_code=409, detail="Configure sua OPENAI_API_KEY na tela de configurações antes de gerar conteúdo com IA.")
 
-    return gerar_carrossel_com_openai(db, carrossel, regenerar=regenerar)
+    return gerar_carrossel_com_openai(db, carrossel, api_key=credentials.openai_api_key, regenerar=regenerar, usuario=usuario)

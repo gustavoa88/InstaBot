@@ -7,11 +7,12 @@ from urllib.request import urlopen
 
 from fastapi import HTTPException
 from openai import OpenAI
+# Pillow remains only for standalone asset fallback generation, not slide rendering.
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy.orm import Session
 
 from app.config import (
-    OPENAI_API_KEY,
+    OPENAI_IMAGE_ADMIN_DAILY_REQUEST_LIMIT,
     OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT,
     OPENAI_IMAGE_DAILY_REQUEST_LIMIT,
     OPENAI_IMAGE_MODEL,
@@ -19,16 +20,17 @@ from app.config import (
     STORAGE_PATH,
     PUBLIC_BASE_URL,
 )
-from app.models.carrossel import ASSET_STATUS_ATIVO, ASSET_STATUS_REMOVIDO, Carrossel, CarrosselAsset, LogExecucao
+from app.models.carrossel import ASSET_STATUS_ATIVO, ASSET_STATUS_REMOVIDO, Carrossel, CarrosselAsset, LogExecucao, Usuario
 from app.services.log_service import registrar_log
 
 ASSET_CALL_STARTED = "INICIADO"
 ASSET_LIMIT_BLOCKED = "BLOQUEADO_LIMITE"
 FALLBACK_MODEL = "fallback_pillow_asset_v2"
+OPENAI_API_KEY = ""
 
 
-def openai_image_configurado() -> bool:
-    return bool(OPENAI_API_KEY.strip())
+def openai_image_configurado(api_key: str | None = None) -> bool:
+    return bool((api_key if api_key is not None else OPENAI_API_KEY).strip())
 
 
 def _font(size: int, *, bold: bool = False):
@@ -42,9 +44,17 @@ def _font(size: int, *, bold: bool = False):
     return ImageFont.load_default()
 
 
-def _limites_configurados() -> dict[str, int]:
+def _usuario_is_admin(usuario: Usuario | None, carrossel: Carrossel | None = None) -> bool:
+    if usuario is not None:
+        return bool(getattr(usuario, "is_admin", False))
+    dono = getattr(carrossel, "usuario", None) if carrossel is not None else None
+    return bool(getattr(dono, "is_admin", False))
+
+
+def _limites_configurados(*, usuario: Usuario | None = None, carrossel: Carrossel | None = None) -> dict[str, int]:
+    daily_limit = OPENAI_IMAGE_ADMIN_DAILY_REQUEST_LIMIT if _usuario_is_admin(usuario, carrossel) else OPENAI_IMAGE_DAILY_REQUEST_LIMIT
     return {
-        "daily_request_limit": OPENAI_IMAGE_DAILY_REQUEST_LIMIT,
+        "daily_request_limit": daily_limit,
         "carrossel_request_limit": OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT,
     }
 
@@ -115,11 +125,19 @@ def _prompt_hash(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
-def _count_openai_image_calls(db: Session, *, carrossel_id: int | None = None, desde: datetime | None = None) -> int:
+def _count_openai_image_calls(
+    db: Session,
+    *,
+    carrossel_id: int | None = None,
+    usuario_id: int | None = None,
+    desde: datetime | None = None,
+) -> int:
     query = db.query(LogExecucao).filter(
         LogExecucao.etapa == "asset_ia",
         LogExecucao.status == ASSET_CALL_STARTED,
     )
+    if usuario_id is not None:
+        query = query.join(Carrossel, LogExecucao.carrossel_id == Carrossel.id).filter(Carrossel.usuario_id == usuario_id)
     if carrossel_id is not None:
         query = query.filter(LogExecucao.carrossel_id == carrossel_id)
     if desde is not None:
@@ -127,7 +145,7 @@ def _count_openai_image_calls(db: Session, *, carrossel_id: int | None = None, d
     return query.count()
 
 
-def _block_limit(db: Session, *, carrossel_id: int, escopo: str, limite: int, chamadas: int) -> None:
+def _block_limit(db: Session, *, carrossel_id: int, escopo: str, limite: int, chamadas: int, usuario: Usuario | None = None, carrossel: Carrossel | None = None) -> None:
     registrar_log(
         db,
         carrossel_id=carrossel_id,
@@ -139,35 +157,46 @@ def _block_limit(db: Session, *, carrossel_id: int, escopo: str, limite: int, ch
             "limite": limite,
             "chamadas_registradas": chamadas,
             "modelo": OPENAI_IMAGE_MODEL,
-            "limites": _limites_configurados(),
+            "limites": _limites_configurados(usuario=usuario, carrossel=carrossel),
+            "usuario_id": getattr(usuario, "id", None),
+            "admin": _usuario_is_admin(usuario, carrossel),
         },
     )
     db.commit()
     raise HTTPException(status_code=429, detail=f"Limite {escopo} de geração de imagem atingido ({chamadas}/{limite}).")
 
 
-def _verify_limits(db: Session, carrossel: Carrossel) -> None:
-    if OPENAI_IMAGE_DAILY_REQUEST_LIMIT > 0:
-        inicio_dia = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-        chamadas_dia = _count_openai_image_calls(db, desde=inicio_dia)
-        if chamadas_dia >= OPENAI_IMAGE_DAILY_REQUEST_LIMIT:
-            _block_limit(db, carrossel_id=carrossel.id, escopo="diário", limite=OPENAI_IMAGE_DAILY_REQUEST_LIMIT, chamadas=chamadas_dia)
-    if OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT > 0:
-        chamadas_carrossel = _count_openai_image_calls(db, carrossel_id=carrossel.id)
-        if chamadas_carrossel >= OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT:
-            _block_limit(db, carrossel_id=carrossel.id, escopo="por carrossel", limite=OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT, chamadas=chamadas_carrossel)
+def _verify_limits(db: Session, carrossel: Carrossel, *, usuario: Usuario | None = None) -> None:
+    limit_status = _image_limit_status(db, carrossel, usuario=usuario)
+    if limit_status is not None:
+        _block_limit(
+            db,
+            carrossel_id=carrossel.id,
+            escopo=str(limit_status["escopo"]),
+            limite=int(limit_status["limite"]),
+            chamadas=int(limit_status["chamadas"]),
+            usuario=usuario,
+            carrossel=carrossel,
+        )
 
 
-def _image_limit_status(db: Session, carrossel: Carrossel) -> dict[str, int | str] | None:
-    if OPENAI_IMAGE_DAILY_REQUEST_LIMIT > 0:
+def _image_limit_status(db: Session, carrossel: Carrossel, *, usuario: Usuario | None = None) -> dict[str, int | str] | None:
+    # TODO restore limits: temporary admin exemption while OpenAI-only rendering is stabilized.
+    if _usuario_is_admin(usuario, carrossel):
+        return None
+    limites = _limites_configurados(usuario=usuario, carrossel=carrossel)
+    usuario_id = getattr(usuario, "id", None) or getattr(carrossel, "usuario_id", None)
+    daily_limit = limites["daily_request_limit"]
+    if daily_limit > 0:
         inicio_dia = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-        chamadas_dia = _count_openai_image_calls(db, desde=inicio_dia)
-        if chamadas_dia >= OPENAI_IMAGE_DAILY_REQUEST_LIMIT:
-            return {"escopo": "diário", "limite": OPENAI_IMAGE_DAILY_REQUEST_LIMIT, "chamadas": chamadas_dia}
-    if OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT > 0:
+        chamadas_dia = _count_openai_image_calls(db, usuario_id=usuario_id, desde=inicio_dia)
+        if chamadas_dia >= daily_limit:
+            return {"escopo": "diário", "limite": daily_limit, "chamadas": chamadas_dia}
+    carrossel_limit = limites["carrossel_request_limit"]
+    if carrossel_limit > 0:
         chamadas_carrossel = _count_openai_image_calls(db, carrossel_id=carrossel.id)
-        if chamadas_carrossel >= OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT:
-            return {"escopo": "por carrossel", "limite": OPENAI_IMAGE_CARROSSEL_REQUEST_LIMIT, "chamadas": chamadas_carrossel}
+        if chamadas_carrossel >= carrossel_limit:
+            return {"escopo": "por carrossel", "limite": carrossel_limit, "chamadas": chamadas_carrossel}
     return None
 
 
@@ -287,23 +316,28 @@ def _find_reusable_slide_asset(db: Session, carrossel: Carrossel, slide, prompt_
     return None
 
 
-def gerar_asset_visual(db: Session, carrossel: Carrossel) -> CarrosselAsset:
+def gerar_asset_visual(db: Session, carrossel: Carrossel, *, api_key: str | None = None, strict_config: bool = False, usuario: Usuario | None = None) -> CarrosselAsset:
     prompt = _prompt_asset(carrossel)
     version = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     relative_path = _relative_asset_path(carrossel.id, version)
     revised_prompt = None
-    limit_status = _image_limit_status(db, carrossel) if openai_image_configurado() else None
+    limit_status = _image_limit_status(db, carrossel, usuario=usuario) if openai_image_configurado(api_key) else None
+    if strict_config and not openai_image_configurado(api_key):
+        registrar_log(db, carrossel_id=carrossel.id, etapa="asset_ia", status="BLOQUEADO_CONFIG", mensagem="Chave OpenAI não configurada para o usuário.")
+        raise HTTPException(status_code=409, detail="Configure sua OPENAI_API_KEY na tela de configurações antes de gerar assets com IA.")
+    if strict_config and limit_status is not None:
+        _block_limit(db, carrossel_id=carrossel.id, escopo=str(limit_status["escopo"]), limite=int(limit_status["limite"]), chamadas=int(limit_status["chamadas"]), usuario=usuario, carrossel=carrossel)
 
-    if openai_image_configurado() and limit_status is None:
+    if openai_image_configurado(api_key) and limit_status is None:
         registrar_log(
             db,
             carrossel_id=carrossel.id,
             etapa="asset_ia",
             status=ASSET_CALL_STARTED,
             mensagem="Geração de asset visual com OpenAI iniciada.",
-            detalhes={"modelo": OPENAI_IMAGE_MODEL, "size": OPENAI_IMAGE_SIZE, "limites": _limites_configurados()},
+            detalhes={"modelo": OPENAI_IMAGE_MODEL, "size": OPENAI_IMAGE_SIZE, "limites": _limites_configurados(usuario=usuario, carrossel=carrossel)},
         )
-        client = OpenAI(api_key=OPENAI_API_KEY)
+        client = OpenAI(api_key=api_key if api_key is not None else OPENAI_API_KEY)
         response = client.images.generate(
             model=OPENAI_IMAGE_MODEL,
             prompt=prompt,
@@ -382,7 +416,7 @@ def _fallback_provider_response(*, slide, prompt_hash: str, reason: str) -> dict
     }
 
 
-def gerar_asset_visual_slide(db: Session, carrossel: Carrossel, slide) -> CarrosselAsset:
+def gerar_asset_visual_slide(db: Session, carrossel: Carrossel, slide, *, api_key: str | None = None, strict_config: bool = False, usuario: Usuario | None = None) -> CarrosselAsset:
     prompt = _prompt_slide_asset(carrossel, slide)
     prompt_hash = _prompt_hash(prompt)
     reusable = _find_reusable_slide_asset(db, carrossel, slide, prompt_hash)
@@ -406,9 +440,14 @@ def gerar_asset_visual_slide(db: Session, carrossel: Carrossel, slide) -> Carros
     version = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
     relative_path = _relative_slide_asset_path(carrossel.id, slide.numero_slide, version)
     revised_prompt = None
-    limit_status = _image_limit_status(db, carrossel) if openai_image_configurado() else None
+    limit_status = _image_limit_status(db, carrossel, usuario=usuario) if openai_image_configurado(api_key) else None
+    if strict_config and not openai_image_configurado(api_key):
+        registrar_log(db, carrossel_id=carrossel.id, etapa="asset_ia", status="BLOQUEADO_CONFIG", mensagem="Chave OpenAI não configurada para o usuário.")
+        raise HTTPException(status_code=409, detail="Configure sua OPENAI_API_KEY na tela de configurações antes de gerar assets com IA.")
+    if strict_config and limit_status is not None:
+        _block_limit(db, carrossel_id=carrossel.id, escopo=str(limit_status["escopo"]), limite=int(limit_status["limite"]), chamadas=int(limit_status["chamadas"]), usuario=usuario, carrossel=carrossel)
 
-    if openai_image_configurado() and limit_status is None:
+    if openai_image_configurado(api_key) and limit_status is None:
         registrar_log(
             db,
             carrossel_id=carrossel.id,
@@ -421,10 +460,10 @@ def gerar_asset_visual_slide(db: Session, carrossel: Carrossel, slide) -> Carros
                 "slide_id": getattr(slide, "id", None),
                 "numero_slide": slide.numero_slide,
                 "prompt_hash": prompt_hash,
-                "limites": _limites_configurados(),
+                "limites": _limites_configurados(usuario=usuario, carrossel=carrossel),
             },
         )
-        client = OpenAI(api_key=OPENAI_API_KEY)
+        client = OpenAI(api_key=api_key if api_key is not None else OPENAI_API_KEY)
         response = client.images.generate(
             model=OPENAI_IMAGE_MODEL,
             prompt=prompt,
