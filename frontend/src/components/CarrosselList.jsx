@@ -1,15 +1,18 @@
 import { RefreshCw, Search } from 'lucide-react';
 import { StatusBadge } from './StatusBadge.jsx';
 
+const STATUS_LABELS = {
+  IDEIA_SALVA: 'Ideia salva',
+  GERANDO_ESTRUTURA: 'Gerando estrutura',
+  DESENVOLVENDO_VISUAL: 'Desenvolvendo visual',
+  RENDERIZANDO_SLIDES: 'Renderizando slides',
+  AGUARDANDO_DOWNLOAD: 'Aguardando download',
+  FEITO_DOWNLOAD: 'Feito download',
+};
+
 const STATUSES = [
   'TODOS',
-  'RASCUNHO',
-  'AGUARDANDO_APROVACAO',
-  'APROVADO',
-  'AGENDADO',
-  'PUBLICADO',
-  'REJEITADO',
-  'CANCELADO',
+  ...Object.keys(STATUS_LABELS),
 ];
 
 export function CarrosselList({ carrosseis, selectedId, statusFilter, search, onStatusFilter, onSearch, onSelect, onRefresh, loading }) {
@@ -44,7 +47,11 @@ export function CarrosselList({ carrosseis, selectedId, statusFilter, search, on
         <label className="mt-3 block">
           <span className="field-label">Status</span>
           <select className="input mt-1" value={statusFilter} onChange={(event) => onStatusFilter(event.target.value)}>
-            {STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+            {STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {status === 'TODOS' ? 'Todos' : STATUS_LABELS[status] || status}
+              </option>
+            ))}
           </select>
         </label>
       </div>

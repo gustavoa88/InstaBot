@@ -44,6 +44,7 @@ export function ActionPanel({
   const canRender = Boolean(selected.slides?.length);
   const canDownload = Boolean(selected.slides?.some((slide) => slide.imagem_url));
   const normalizedColor = /^#[0-9A-Fa-f]{6}$/.test(renderForm.primary_color) ? renderForm.primary_color : '#6f9684';
+  const paletteColors = (activeAsset?.provider_response?.palette?.colors || []).filter((color) => /^#[0-9A-Fa-f]{6}$/.test(color));
 
   const downloadSlides = async () => {
     try {
@@ -157,6 +158,21 @@ export function ActionPanel({
                 onChange={(event) => onRenderForm({ ...renderForm, primary_color: event.target.value })}
               />
             </div>
+            {paletteColors.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {paletteColors.map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    className={`h-7 w-7 rounded-md border ${normalizedColor.toLowerCase() === color.toLowerCase() ? 'border-ink ring-2 ring-ink/20' : 'border-line'}`}
+                    style={{ backgroundColor: color }}
+                    title={`Usar ${color}`}
+                    aria-label={`Usar cor ${color}`}
+                    onClick={() => onRenderForm({ ...renderForm, primary_color: color })}
+                  />
+                ))}
+              </div>
+            )}
           </label>
           <label className="mt-3 flex items-center gap-2 text-sm text-ink/70">
             <input

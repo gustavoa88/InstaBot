@@ -14,8 +14,8 @@ from app.models.carrossel import (
     CarrosselAsset,
     CarrosselSlide,
     LogExecucao,
+    STATUS_FEITO_DOWNLOAD,
     Usuario,
-    STATUS_AGUARDANDO_APROVACAO,
 )
 from app.schemas.carrossel import (
     AssetVisualRead,
@@ -32,7 +32,7 @@ from app.services.export_service import export_carousel_to_zip
 from app.services.image_asset_service import gerar_asset_visual, remover_asset_visual
 from app.services.log_service import registrar_log
 from app.security import get_current_user
-from app.services.render_service import renderizar_carrossel_slides
+from app.services.render_service import renderizar_carrossel_slides, renderizar_slide
 from app.services.user_config_service import credentials_for_user
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -113,6 +113,9 @@ def exportar_carrossel(carrossel_id: int, db: Session = Depends(get_db), usuario
         zip_bytes = export_carousel_to_zip(db, carrossel, STORAGE_PATH)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    carrossel.status = STATUS_FEITO_DOWNLOAD
+    db.commit()
+    db.refresh(carrossel)
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     filename = f"carousel_{carrossel.id}_{timestamp}.zip"
     headers = {"Content-Disposition": f"attachment; filename=\"{filename}\""}
@@ -245,6 +248,55 @@ def renderizar_carrossel(
     db.commit()
     db.refresh(carrossel)
     return buscar_carrossel(db, carrossel.id, usuario)
+
+
+@router.post("/slides/{slide_id}/renderizar", response_model=SlideRead)
+def renderizar_slide_unico(
+    slide_id: int,
+    payload: RenderizacaoCreate | None = Body(default=None),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_current_user),
+):
+    slide = (
+        db.query(CarrosselSlide)
+        .options(joinedload(CarrosselSlide.carrossel))
+        .join(Carrossel, CarrosselSlide.carrossel_id == Carrossel.id)
+        .filter(CarrosselSlide.id == slide_id)
+        .filter(Carrossel.usuario_id == usuario.id)
+        .first()
+    )
+    if slide is None:
+        raise HTTPException(status_code=404, detail="Slide não encontrado.")
+
+    carrossel = slide.carrossel
+    opcoes = payload or RenderizacaoCreate()
+    asset = None
+    if opcoes.asset_id:
+        asset = buscar_asset(db, opcoes.asset_id, usuario)
+        if asset.carrossel_id != carrossel.id or asset.status != ASSET_STATUS_ATIVO:
+            raise HTTPException(status_code=404, detail="Asset visual não encontrado para este carrossel.")
+        # In OpenAI-only mode, selected asset support is currently ignored.
+        asset = None
+
+    credentials = credentials_for_user(db, usuario)
+    if not credentials.openai_api_key:
+        raise HTTPException(status_code=409, detail="Configure sua OPENAI_API_KEY na tela de configurações antes de renderizar com IA.")
+
+    renderizar_slide(
+        db,
+        carrossel,
+        slide,
+        template=opcoes.template,
+        brand_name=opcoes.brand_name,
+        primary_color=opcoes.primary_color,
+        asset=asset,
+        api_key=credentials.openai_api_key,
+        usuario=usuario,
+        aspect_ratio=opcoes.aspect_ratio,
+    )
+    db.commit()
+    db.refresh(slide)
+    return slide
 
 
 @router.get("/carrosseis/{carrossel_id}/slides", response_model=list[SlideRead])

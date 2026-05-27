@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from app.schemas.carrossel import CarrosselCreate, RenderizacaoCreate, SlideUpdate
 from app.security import require_admin_token
-from app.models.carrossel import CarrosselSlide, STATUS_AGUARDANDO_APROVACAO
+from app.models.carrossel import CarrosselSlide, STATUS_DESENVOLVENDO_VISUAL
 from app.services import ai_service, image_asset_service, media_cleanup_service, render_service
 
 
@@ -81,6 +81,20 @@ def _fake_carrossel(template_id=10):
 
 
 
+def test_extract_palette_returns_hex_colors(tmp_path, monkeypatch):
+    monkeypatch.setattr(image_asset_service, "STORAGE_PATH", str(tmp_path))
+    relative_path = Path("palette-test.png")
+    image = Image.new("RGB", (24, 12), "#336699")
+    image.paste("#d9a441", (12, 0, 24, 12))
+    image.save(tmp_path / relative_path, format="PNG")
+
+    colors = image_asset_service._extract_palette(relative_path, max_colors=4)
+
+    assert "#336699" in colors
+    assert "#d9a441" in colors
+    assert all(color.startswith("#") and len(color) == 7 for color in colors)
+
+
 def test_image_asset_fallback_creates_relative_png(tmp_path, monkeypatch):
     monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "")
     monkeypatch.setattr(image_asset_service, "STORAGE_PATH", str(tmp_path))
@@ -99,6 +113,9 @@ def test_image_asset_fallback_creates_relative_png(tmp_path, monkeypatch):
     rendered = tmp_path / asset.asset_path
     assert rendered.exists()
     assert rendered.read_bytes().startswith(b"\x89PNG")
+    palette_colors = asset.provider_response["palette"]["colors"]
+    assert palette_colors
+    assert all(color.startswith("#") and len(color) == 7 for color in palette_colors)
 
 
 def test_image_asset_limit_blocks_without_openai_call(monkeypatch):
@@ -358,6 +375,60 @@ def test_render_service_uses_openai_full_slide_for_each_slide(tmp_path, monkeypa
         assert image.size == (1024, 1536)
 
 
+def test_render_service_renders_only_one_slide(tmp_path, monkeypatch):
+    monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(render_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(render_service, "OPENAI_IMAGE_MODEL", "gpt-image-test")
+    monkeypatch.setattr(image_asset_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(render_service, "_image_limit_status", lambda *_args, **_kwargs: None)
+    calls = []
+
+    class FakeImages:
+        def generate(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(data=[SimpleNamespace(b64_json=_png_b64((90, 140, 210)))])
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            self.api_key = api_key
+            self.images = FakeImages()
+
+    monkeypatch.setattr(render_service, "OpenAI", FakeOpenAI)
+    carrossel, first_slide = _fake_carrossel(template_id=48)
+    second_slide = SimpleNamespace(
+        id=2,
+        carrossel_id=48,
+        numero_slide=2,
+        titulo="Segundo slide",
+        texto_principal="Texto que não deve ser renderizado neste teste.",
+        texto_secundario="",
+        observacao_visual="Cena antiga que deve permanecer intacta.",
+        imagem_path="carrosseis/48/slides/slide-02-old.png",
+        imagem_url="/storage/carrosseis/48/slides/slide-02-old.png",
+        layout_config={"renderer": "old", "canvas": {"width": 1080, "height": 1350}},
+    )
+    carrossel.slides = [first_slide, second_slide]
+
+    render_service.renderizar_slide(
+        FakeDb(),
+        carrossel,
+        first_slide,
+        template="clean_editorial",
+        usuario=SimpleNamespace(is_admin=True),
+        aspect_ratio="1.91:1",
+    )
+
+    assert len(calls) == 1
+    assert first_slide.layout_config["renderer"] == "openai_full_slide"
+    assert first_slide.layout_config["aspect_ratio_value"] == "1.91:1"
+    assert first_slide.layout_config["canvas"] == {"width": 1080, "height": 566}
+    assert (tmp_path / first_slide.imagem_path).exists()
+    assert second_slide.imagem_path == "carrosseis/48/slides/slide-02-old.png"
+    assert second_slide.imagem_url == "/storage/carrosseis/48/slides/slide-02-old.png"
+    assert second_slide.layout_config == {"renderer": "old", "canvas": {"width": 1080, "height": 1350}}
+
+
 def test_render_service_aborts_without_partial_updates_when_openai_key_is_invalid(tmp_path, monkeypatch):
     monkeypatch.setattr(render_service, "STORAGE_PATH", str(tmp_path))
     monkeypatch.setattr(render_service, "PUBLIC_BASE_URL", "")
@@ -544,6 +615,9 @@ def test_frontend_uses_only_global_background_asset_for_render():
 
     assert "asset.tipo === 'background'" in app_source
     assert "asset.tipo === 'background'" in panel_source
+    assert "applyAssetPalette" in app_source
+    assert "provider_response?.palette?.colors" in panel_source
+    assert "primary_color: firstColor" in app_source
 
 
 def test_openai_text_generation_401_returns_clear_sanitized_error(monkeypatch):
@@ -694,7 +768,7 @@ def test_openai_generation_creates_slides_and_updates_status(monkeypatch):
     assert calls["text"]["format"]["type"] == "json_schema"
     assert calls["text"]["format"]["schema"] == ai_service.CARROSSEL_RESPONSE_SCHEMA
     assert [slide.numero_slide for slide in slides] == [1, 2]
-    assert result.status == STATUS_AGUARDANDO_APROVACAO
+    assert result.status == STATUS_DESENVOLVENDO_VISUAL
     assert result.ia_resultado["mock"] is False
     assert result.ia_resultado["provider"] == "openai"
     assert result.ia_resultado["usage"] == {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30}

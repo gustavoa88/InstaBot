@@ -20,7 +20,15 @@ from app.config import (
     STORAGE_PATH,
     PUBLIC_BASE_URL,
 )
-from app.models.carrossel import ASSET_STATUS_ATIVO, ASSET_STATUS_REMOVIDO, Carrossel, CarrosselAsset, LogExecucao, Usuario
+from app.models.carrossel import (
+    ASSET_STATUS_ATIVO,
+    ASSET_STATUS_REMOVIDO,
+    Carrossel,
+    CarrosselAsset,
+    LogExecucao,
+    STATUS_DESENVOLVENDO_VISUAL,
+    Usuario,
+)
 from app.services.log_service import registrar_log
 
 ASSET_CALL_STARTED = "INICIADO"
@@ -207,6 +215,46 @@ def _save_bytes(content: bytes, relative_path: Path) -> None:
     output_path.write_bytes(content)
 
 
+def _hex_color(rgb: tuple[int, int, int]) -> str:
+    return "#" + "".join(f"{part:02x}" for part in rgb)
+
+
+def _color_distance(left: tuple[int, int, int], right: tuple[int, int, int]) -> int:
+    return sum(abs(left[index] - right[index]) for index in range(3))
+
+
+def _extract_palette(relative_path: Path, *, max_colors: int = 6) -> list[str]:
+    try:
+        image_path = Path(STORAGE_PATH).resolve() / relative_path
+        with Image.open(image_path) as image:
+            image = image.convert("RGB")
+            image.thumbnail((96, 96))
+            colors = image.getcolors(maxcolors=96 * 96) or []
+    except Exception:
+        return []
+
+    palette: list[tuple[int, int, int]] = []
+    for count, color in sorted(colors, key=lambda item: item[0], reverse=True):
+        if count <= 0:
+            continue
+        if max(color) > 245 and min(color) > 225:
+            continue
+        if max(color) < 28:
+            continue
+        if any(_color_distance(color, selected) < 52 for selected in palette):
+            continue
+        palette.append(color)
+        if len(palette) >= max_colors:
+            break
+    return [_hex_color(color) for color in palette]
+
+
+def _attach_palette(provider_response: dict[str, Any], relative_path: Path) -> None:
+    colors = _extract_palette(relative_path)
+    if colors:
+        provider_response["palette"] = {"colors": colors, "source": "asset_image"}
+
+
 def _fallback_image(carrossel: Carrossel, relative_path: Path, slide=None) -> None:
     width, height = 1024, 1536
     seed_text = f"{getattr(slide, 'numero_slide', '')}|{getattr(slide, 'observacao_visual', '')}|{carrossel.tema or ''}"
@@ -318,6 +366,7 @@ def _find_reusable_slide_asset(db: Session, carrossel: Carrossel, slide, prompt_
 
 def gerar_asset_visual(db: Session, carrossel: Carrossel, *, api_key: str | None = None, strict_config: bool = False, usuario: Usuario | None = None) -> CarrosselAsset:
     prompt = _prompt_asset(carrossel)
+    carrossel.status = STATUS_DESENVOLVENDO_VISUAL
     version = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     relative_path = _relative_asset_path(carrossel.id, version)
     revised_prompt = None
@@ -377,6 +426,8 @@ def gerar_asset_visual(db: Session, carrossel: Carrossel, *, api_key: str | None
             if limit_status
             else "Asset visual fallback gerado localmente."
         )
+
+    _attach_palette(provider_response, relative_path)
 
     asset = CarrosselAsset(
         carrossel_id=carrossel.id,

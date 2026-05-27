@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Loader2, LogOut, Settings } from 'lucide-react';
+import { AlertTriangle, ChevronLeft, ChevronRight, Loader2, LogOut, Settings } from 'lucide-react';
 import { ActionPanel } from './components/ActionPanel.jsx';
 import { AuthScreen } from './components/AuthScreen.jsx';
 import { CarrosselList } from './components/CarrosselList.jsx';
@@ -66,6 +66,7 @@ export default function App() {
   const [config, setConfig] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsForm, setSettingsForm] = useState({});
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const selected = useMemo(
     () => carrosseis.find((item) => item.id === selectedId) || null,
@@ -189,14 +190,34 @@ export default function App() {
     await loadData(selected.id);
   }, 'Conteúdo salvo.').catch(() => {});
 
+  const slidePayload = (slide) => ({
+    titulo: slide.titulo || null,
+    texto_principal: slide.texto_principal || null,
+    texto_secundario: slide.texto_secundario || null,
+    observacao_visual: slide.observacao_visual || null,
+  });
+
+  const hasSlideTextChanges = (slideId) => {
+    const original = selected?.slides?.find((slide) => slide.id === slideId);
+    const draftSlide = slideDrafts[slideId];
+    if (!original || !draftSlide) return false;
+    return ['titulo', 'texto_principal', 'texto_secundario', 'observacao_visual'].some((field) => (draftSlide[field] || '') !== (original[field] || ''));
+  };
+
+  const renderPayload = () => {
+    const activeAsset = [...(selected?.assets || [])].filter((asset) => asset.status === 'ATIVO' && asset.tipo === 'background').sort((a, b) => b.id - a.id)[0];
+    return {
+      template: renderForm.template || null,
+      brand_name: renderForm.brand_name || null,
+      primary_color: renderForm.primary_color || null,
+      asset_id: renderForm.use_asset && activeAsset ? activeAsset.id : null,
+      aspect_ratio: renderForm.aspect_ratio || '4:5',
+    };
+  };
+
   const saveSlide = (slideId) => run(async () => {
     const slide = slideDrafts[slideId];
-    await api.updateSlide(slideId, {
-      titulo: slide.titulo || null,
-      texto_principal: slide.texto_principal || null,
-      texto_secundario: slide.texto_secundario || null,
-      observacao_visual: slide.observacao_visual || null,
-    });
+    await api.updateSlide(slideId, slidePayload(slide));
     await loadData(selected.id);
   }, 'Slide salvo.').catch(() => {});
 
@@ -210,16 +231,29 @@ export default function App() {
     await loadData(selected.id);
   }, message).catch(() => {});
 
-  const renderSlides = () => {
-    const activeAsset = [...(selected?.assets || [])].filter((asset) => asset.status === 'ATIVO' && asset.tipo === 'background').sort((a, b) => b.id - a.id)[0];
-    return simpleAction((id) => api.renderSlides(id, {
-      template: renderForm.template || null,
-      brand_name: renderForm.brand_name || null,
-      primary_color: renderForm.primary_color || null,
-      asset_id: renderForm.use_asset && activeAsset ? activeAsset.id : null,
-      aspect_ratio: renderForm.aspect_ratio || '4:5',
-    }), 'Slides renderizados. Revise os previews.');
+  const renderSlides = () => simpleAction((id) => api.renderSlides(id, renderPayload()), 'Slides renderizados. Revise os previews.');
+
+  const renderSingleSlide = (slideId) => run(async () => {
+    const draftSlide = slideDrafts[slideId];
+    if (draftSlide && hasSlideTextChanges(slideId)) {
+      await api.updateSlide(slideId, slidePayload(draftSlide));
+    }
+    await api.renderSlide(slideId, renderPayload());
+    await loadData(selected.id);
+  }, 'Slide renderizado. Revise o preview.').catch(() => {});
+
+  const applyAssetPalette = (asset) => {
+    const firstColor = (asset?.provider_response?.palette?.colors || []).find((color) => /^#[0-9A-Fa-f]{6}$/.test(color));
+    if (firstColor) {
+      setRenderForm((current) => ({ ...current, primary_color: firstColor }));
+    }
   };
+
+  const generateAsset = () => run(async () => {
+    const asset = await api.generateAsset(selected.id);
+    applyAssetPalette(asset);
+    await loadData(selected.id);
+  }, 'Asset visual gerado.').catch(() => {});
 
   const regenerateCarrossel = () => {
     const confirmed = window.confirm(
@@ -241,9 +275,19 @@ export default function App() {
     <div className="min-h-screen bg-paper text-ink">
       <header className="border-b border-line bg-white px-4 py-3">
         <div className="mx-auto flex max-w-[1800px] flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-lg font-semibold text-ink">Content Carousel Console</h1>
-            <p className="text-sm text-ink/55">Crie a ideia, gere slides, revise e renderize os previews.</p>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="secondary-button hidden md:flex"
+              title={sidebarOpen ? 'Fechar painel' : 'Abrir painel'}
+            >
+              {sidebarOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            </button>
+            <div>
+              <h1 className="text-lg font-semibold text-ink">Content Carousel Console</h1>
+              <p className="text-sm text-ink/55">Crie a ideia, gere slides, revise e renderize os previews.</p>
+            </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <div className="text-right text-sm text-ink/60">
@@ -275,18 +319,24 @@ export default function App() {
         />
       )}
 
-      <div className="mx-auto grid max-w-[1800px] gap-4 p-4 xl:grid-cols-[320px_minmax(0,1fr)_360px]">
-        <CarrosselList
-          carrosseis={carrosseis}
-          selectedId={selectedId}
-          statusFilter={statusFilter}
-          search={search}
-          onStatusFilter={setStatusFilter}
-          onSearch={setSearch}
-          onSelect={setSelectedId}
-          onRefresh={refresh}
-          loading={loading}
-        />
+      <div className={`mx-auto grid max-w-[1800px] gap-4 p-4 transition-all duration-300 ${
+        sidebarOpen
+          ? 'xl:grid-cols-[320px_minmax(0,1fr)_360px]'
+          : 'xl:grid-cols-[minmax(0,1fr)_360px]'
+      }`}>
+        {sidebarOpen && (
+          <CarrosselList
+            carrosseis={carrosseis}
+            selectedId={selectedId}
+            statusFilter={statusFilter}
+            search={search}
+            onStatusFilter={setStatusFilter}
+            onSearch={setSearch}
+            onSelect={setSelectedId}
+            onRefresh={refresh}
+            loading={loading}
+          />
+        )}
 
         <div className="flex min-h-0 flex-col gap-4">
           {error && (
@@ -305,6 +355,7 @@ export default function App() {
             onSlideDraftChange={(slideId, next) => setSlideDrafts((current) => ({ ...current, [slideId]: next }))}
             onSaveCarrossel={saveCarrossel}
             onSaveSlide={saveSlide}
+            onRenderSlide={renderSingleSlide}
             onDelete={deleteSelected}
             loading={loading}
           />
@@ -318,7 +369,7 @@ export default function App() {
             onGenerate={() => simpleAction(api.generate, 'Slides gerados. Revise o texto antes de renderizar.')}
             onRegenerate={regenerateCarrossel}
             onRenderSlides={renderSlides}
-            onGenerateAsset={() => simpleAction(api.generateAsset, 'Asset visual gerado.')}
+            onGenerateAsset={generateAsset}
             onDeleteAsset={(assetId) => run(async () => {
               await api.deleteAsset(assetId);
               await loadData(selected.id);

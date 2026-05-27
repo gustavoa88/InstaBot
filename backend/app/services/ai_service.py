@@ -21,8 +21,9 @@ from app.models.carrossel import (
     CarrosselSlide,
     LogExecucao,
     Usuario,
-    STATUS_AGUARDANDO_APROVACAO,
-    STATUS_GERANDO,
+    STATUS_DESENVOLVENDO_VISUAL,
+    STATUS_GERANDO_ESTRUTURA,
+    STATUS_ERRO,
 )
 from app.services.log_service import registrar_log
 
@@ -355,7 +356,7 @@ def _validar_slides_openai(slides: Any, quantidade_esperada: int) -> list[dict[s
 def gerar_carrossel_com_openai(db: Session, carrossel: Carrossel, *, api_key: str | None = None, regenerar: bool = False, usuario: Usuario | None = None) -> Carrossel:
     _verificar_limites(db, carrossel, usuario=usuario)
 
-    carrossel.status = STATUS_GERANDO
+    carrossel.status = STATUS_GERANDO_ESTRUTURA
     request_config = {
         "modelo": OPENAI_MODEL,
         "regenerar": regenerar,
@@ -436,7 +437,7 @@ def gerar_carrossel_com_openai(db: Session, carrossel: Carrossel, *, api_key: st
             )
         db.flush()
 
-        carrossel.status = STATUS_AGUARDANDO_APROVACAO
+        carrossel.status = STATUS_DESENVOLVENDO_VISUAL
         registrar_log(
             db,
             carrossel_id=carrossel.id,
@@ -453,6 +454,7 @@ def gerar_carrossel_com_openai(db: Session, carrossel: Carrossel, *, api_key: st
         )
         return carrossel
     except Exception as exc:
+        carrossel.status = STATUS_ERRO
         registrar_log(
             db,
             carrossel_id=carrossel.id,

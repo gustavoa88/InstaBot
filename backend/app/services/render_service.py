@@ -9,7 +9,13 @@ from openai import OpenAI
 from sqlalchemy.orm import Session
 
 from app.config import OPENAI_ADMIN_IMAGE_RENDER_MAX_ATTEMPTS, OPENAI_IMAGE_MODEL, OPENAI_IMAGE_SIZE, PUBLIC_BASE_URL, STORAGE_PATH
-from app.models.carrossel import Carrossel, Usuario
+from app.models.carrossel import (
+    Carrossel,
+    STATUS_AGUARDANDO_DOWNLOAD,
+    STATUS_ERRO,
+    STATUS_RENDERIZANDO_SLIDES,
+    Usuario,
+)
 from app.services.image_asset_service import (
     ASSET_CALL_STARTED,
     _image_limit_status,
@@ -322,9 +328,10 @@ def _public_url(relative_path: Path, version: str) -> str:
 
 
 
-def renderizar_carrossel_slides(
+def _renderizar_slides_openai(
     db: Session,
     carrossel: Carrossel,
+    slides: list[Any],
     *,
     template: str | None = None,
     brand_name: str | None = None,
@@ -333,6 +340,7 @@ def renderizar_carrossel_slides(
     api_key: str | None = None,
     usuario: Usuario | None = None,
     aspect_ratio: str | None = None,
+    unitario: bool = False,
 ) -> Carrossel:
     selected_template = _template_name(template)
     if asset is not None:
@@ -346,13 +354,14 @@ def renderizar_carrossel_slides(
     if not openai_image_configurado(effective_api_key):
         raise HTTPException(status_code=409, detail="Configure sua OPENAI_API_KEY na tela de configurações antes de renderizar com IA.")
 
+    carrossel.status = STATUS_RENDERIZANDO_SLIDES
     registrar_log(
         db,
         carrossel_id=carrossel.id,
         etapa="renderizacao",
         status="INICIADO",
         mensagem="Renderização OpenAI-only dos slides iniciada.",
-        detalhes={"slides": len(carrossel.slides), "template": selected_template, "renderer": "openai_full_slide"},
+        detalhes={"slides": len(slides), "template": selected_template, "renderer": "openai_full_slide", "unitario": unitario},
     )
 
     storage_root = Path(STORAGE_PATH).resolve()
@@ -366,7 +375,7 @@ def renderizar_carrossel_slides(
     generated_slides: list[tuple[Any, Path, Path, Path, dict[str, Any]]] = []
     temp_paths: list[Path] = []
     try:
-        for slide in carrossel.slides:
+        for slide in slides:
             relative_path = _relative_slide_path(carrossel.id, slide.numero_slide)
             output_path = storage_root / relative_path
             temp_path = output_path.with_name(f".{output_path.stem}-openai-{version}.tmp.png")
@@ -427,12 +436,74 @@ def renderizar_carrossel_slides(
             "rendered_at": datetime.utcnow().isoformat(),
         }
 
+    carrossel.status = STATUS_AGUARDANDO_DOWNLOAD
     registrar_log(
         db,
         carrossel_id=carrossel.id,
         etapa="renderizacao",
         status="CONCLUIDO",
         mensagem="Renderização OpenAI-only dos slides concluída.",
-        detalhes={"slides_renderizados": len(carrossel.slides), "template": selected_template, "aspect_ratio": aspect_config["label"], "canvas": {"width": aspect_config["width"], "height": aspect_config["height"]}},
+        detalhes={
+            "slides_renderizados": len(slides),
+            "slide_id": getattr(slides[0], "id", None) if unitario and slides else None,
+            "template": selected_template,
+            "aspect_ratio": aspect_config["label"],
+            "canvas": {"width": aspect_config["width"], "height": aspect_config["height"]},
+            "unitario": unitario,
+        },
     )
     return carrossel
+
+
+def renderizar_carrossel_slides(
+    db: Session,
+    carrossel: Carrossel,
+    *,
+    template: str | None = None,
+    brand_name: str | None = None,
+    primary_color: str | None = None,
+    asset=None,
+    api_key: str | None = None,
+    usuario: Usuario | None = None,
+    aspect_ratio: str | None = None,
+) -> Carrossel:
+    return _renderizar_slides_openai(
+        db,
+        carrossel,
+        list(carrossel.slides),
+        template=template,
+        brand_name=brand_name,
+        primary_color=primary_color,
+        asset=asset,
+        api_key=api_key,
+        usuario=usuario,
+        aspect_ratio=aspect_ratio,
+    )
+
+
+def renderizar_slide(
+    db: Session,
+    carrossel: Carrossel,
+    slide,
+    *,
+    template: str | None = None,
+    brand_name: str | None = None,
+    primary_color: str | None = None,
+    asset=None,
+    api_key: str | None = None,
+    usuario: Usuario | None = None,
+    aspect_ratio: str | None = None,
+) -> Carrossel:
+    return _renderizar_slides_openai(
+        db,
+        carrossel,
+        [slide],
+        template=template,
+        brand_name=brand_name,
+        primary_color=primary_color,
+        asset=asset,
+        api_key=api_key,
+        usuario=usuario,
+        aspect_ratio=aspect_ratio,
+        unitario=True,
+    )

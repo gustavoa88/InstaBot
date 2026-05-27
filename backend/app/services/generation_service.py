@@ -4,8 +4,8 @@ from sqlalchemy.orm import Session
 from app.models.carrossel import (
     Carrossel,
     CarrosselSlide,
-    STATUS_AGUARDANDO_APROVACAO,
-    STATUS_GERANDO,
+    STATUS_DESENVOLVENDO_VISUAL,
+    STATUS_GERANDO_ESTRUTURA,
 )
 from app.services.log_service import registrar_log
 
@@ -21,7 +21,7 @@ def _titulo_curto_da_ideia(ideia: str, limite: int = 90) -> str:
 
 
 def gerar_carrossel_mockado(db: Session, carrossel: Carrossel, *, regenerar: bool = False) -> Carrossel:
-    carrossel.status = STATUS_GERANDO
+    carrossel.status = STATUS_GERANDO_ESTRUTURA
     registrar_log(
         db,
         carrossel_id=carrossel.id,
@@ -80,7 +80,7 @@ def gerar_carrossel_mockado(db: Session, carrossel: Carrossel, *, regenerar: boo
         "publico_alvo": carrossel.publico_alvo,
         "observacao": "Substituir por OpenAI após validação do fluxo MVP.",
     }
-    carrossel.status = STATUS_AGUARDANDO_APROVACAO
+    carrossel.status = STATUS_DESENVOLVENDO_VISUAL
 
     registrar_log(
         db,

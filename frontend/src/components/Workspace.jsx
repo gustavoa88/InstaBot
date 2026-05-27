@@ -1,4 +1,4 @@
-import { Save, Trash2 } from 'lucide-react';
+import { RefreshCw, Save, Trash2 } from 'lucide-react';
 import { EmptyState } from './EmptyState.jsx';
 import { StatusBadge } from './StatusBadge.jsx';
 
@@ -12,7 +12,7 @@ function resolveMediaUrl(url) {
   return `/api${url}`;
 }
 
-export function Workspace({ selected, draft, slideDrafts, onDraftChange, onSlideDraftChange, onSaveCarrossel, onSaveSlide, onDelete, loading }) {
+export function Workspace({ selected, draft, slideDrafts, onDraftChange, onSlideDraftChange, onSaveCarrossel, onSaveSlide, onRenderSlide, onDelete, loading }) {
   if (!selected) {
     return <EmptyState title="Selecione ou crie um carrossel" description="A revisão de slides, legenda e metadados aparece aqui assim que houver um item ativo." />;
   }
@@ -37,7 +37,7 @@ export function Workspace({ selected, draft, slideDrafts, onDraftChange, onSlide
               <Save className="h-4 w-4" />
               Salvar conteúdo
             </button>
-            <button className="danger-button" onClick={onDelete} disabled={loading || selected.status === 'PUBLICADO'}>
+            <button className="danger-button" onClick={onDelete} disabled={loading}>
               <Trash2 className="h-4 w-4" />
               Remover
             </button>
@@ -107,10 +107,16 @@ export function Workspace({ selected, draft, slideDrafts, onDraftChange, onSlide
               <article key={slide.id} className="min-w-[360px] snap-start rounded-md border border-line bg-white p-3">
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-md bg-steel/10 px-2 text-xs font-semibold text-steel">{slide.numero_slide}</span>
-                  <button className="secondary-button py-1.5" onClick={() => onSaveSlide(slide.id)} disabled={loading}>
-                    <Save className="h-4 w-4" />
-                    Salvar
-                  </button>
+                  <div className="flex gap-2">
+                    <button className="secondary-button py-1.5" onClick={() => onSaveSlide(slide.id)} disabled={loading}>
+                      <Save className="h-4 w-4" />
+                      Salvar
+                    </button>
+                    <button className="secondary-button py-1.5" onClick={() => onRenderSlide(slide.id)} disabled={loading}>
+                      <RefreshCw className="h-4 w-4" />
+                      Regerar
+                    </button>
+                  </div>
                 </div>
                 {draftSlide.imagem_url && (
                   <figure className="mb-3 overflow-hidden rounded-md border border-line bg-stone-50">
