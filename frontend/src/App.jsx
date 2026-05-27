@@ -23,15 +23,6 @@ const DEFAULT_RENDER_FORM = {
   use_asset: true,
 };
 
-function toIsoFromLocal(value) {
-  return new Date(value).toISOString();
-}
-
-function toLocalDateInput(date = new Date(Date.now() + 3600000)) {
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 16);
-}
-
 function normalizeCarrosselPayload(draft) {
   const hashtagsText = draft.hashtagsText ?? (Array.isArray(draft.hashtags) ? draft.hashtags.join(' ') : '');
   return {
@@ -62,9 +53,7 @@ export default function App() {
   const [createForm, setCreateForm] = useState(EMPTY_FORM);
   const [draft, setDraft] = useState({});
   const [slideDrafts, setSlideDrafts] = useState({});
-  const [scheduleForm, setScheduleForm] = useState({ agendado_para: toLocalDateInput(), plataforma: 'instagram' });
   const [renderForm, setRenderForm] = useState(DEFAULT_RENDER_FORM);
-  const [rescheduleForms, setRescheduleForms] = useState({});
   const [statusFilter, setStatusFilter] = useState('TODOS');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
@@ -142,18 +131,6 @@ export default function App() {
     }
     setDraft({ ...selected, hashtagsText: Array.isArray(selected.hashtags) ? selected.hashtags.join(' ') : '' });
     setSlideDrafts(Object.fromEntries((selected.slides || []).map((slide) => [slide.id, { ...slide }])));
-    const pendingPublication = (selected.publicacoes || []).find((publication) => publication.status === 'AGENDADO');
-    setScheduleForm({
-      agendado_para: pendingPublication ? toLocalDateInput(new Date(pendingPublication.agendado_para)) : toLocalDateInput(),
-      plataforma: pendingPublication?.plataforma || 'instagram',
-    });
-    setRescheduleForms(Object.fromEntries((selected.publicacoes || []).map((publication) => [
-      publication.id,
-      {
-        agendado_para: toLocalDateInput(new Date(publication.agendado_para)),
-        plataforma: publication.plataforma,
-      },
-    ])));
   }, [selected]);
 
   const refresh = () => run(() => loadData(selectedId), 'Dados atualizados.').catch(() => {});
@@ -218,7 +195,6 @@ export default function App() {
       texto_principal: slide.texto_principal || null,
       texto_secundario: slide.texto_secundario || null,
       observacao_visual: slide.observacao_visual || null,
-      aprovado: slide.aprovado,
     });
     await loadData(selected.id);
   }, 'Slide salvo.').catch(() => {});
@@ -240,30 +216,8 @@ export default function App() {
       brand_name: renderForm.brand_name || null,
       primary_color: renderForm.primary_color || null,
       asset_id: renderForm.use_asset && activeAsset ? activeAsset.id : null,
-    }), 'Slides renderizados. Agora revise e aprove.');
+    }), 'Slides renderizados. Revise os previews.');
   };
-
-  const schedule = () => run(async () => {
-    await api.schedule(selected.id, {
-      agendado_para: toIsoFromLocal(scheduleForm.agendado_para),
-      plataforma: scheduleForm.plataforma || 'instagram',
-    });
-    await loadData(selected.id);
-  }, 'Publicação agendada.').catch(() => {});
-
-  const reschedule = (publicationId) => run(async () => {
-    const form = rescheduleForms[publicationId];
-    await api.reschedule(publicationId, {
-      agendado_para: toIsoFromLocal(form.agendado_para),
-      plataforma: form.plataforma || 'instagram',
-    });
-    await loadData(selected.id);
-  }, 'Publicação reagendada.').catch(() => {});
-
-  const cancelPublication = (publicationId) => run(async () => {
-    await api.cancelPublication(publicationId);
-    await loadData(selected.id);
-  }, 'Publicação cancelada.').catch(() => {});
 
   const regenerateCarrossel = () => {
     const confirmed = window.confirm(
@@ -287,12 +241,12 @@ export default function App() {
         <div className="mx-auto flex max-w-[1800px] flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-ink">Content Carousel Console</h1>
-            <p className="text-sm text-ink/55">Crie a ideia, gere slides, revise, renderize e então aprove ou agende.</p>
+            <p className="text-sm text-ink/55">Crie a ideia, gere slides, revise e renderize os previews.</p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <div className="text-right text-sm text-ink/60">
               <div className="font-semibold text-ink">{user.nome}</div>
-              <div>{config?.openai_configurado ? 'OpenAI configurada' : 'OpenAI pendente'} · {config?.instagram_configurado ? 'Instagram configurado' : 'Instagram pendente'}</div>
+              <div>{config?.openai_configurado ? 'OpenAI configurada' : 'OpenAI pendente'}</div>
             </div>
             <button className="secondary-button" type="button" onClick={openSettings}>
               <Settings className="h-4 w-4" /> Configurações
@@ -357,11 +311,7 @@ export default function App() {
         <div className="flex min-h-0 flex-col gap-4">
           <ActionPanel
             selected={selected}
-            scheduleForm={scheduleForm}
-            rescheduleForms={rescheduleForms}
             renderForm={renderForm}
-            onScheduleForm={setScheduleForm}
-            onRescheduleForm={(publicationId, next) => setRescheduleForms((current) => ({ ...current, [publicationId]: next }))}
             onRenderForm={setRenderForm}
             onGenerate={() => simpleAction(api.generate, 'Slides gerados. Revise o texto antes de renderizar.')}
             onRegenerate={regenerateCarrossel}
@@ -371,12 +321,6 @@ export default function App() {
               await api.deleteAsset(assetId);
               await loadData(selected.id);
             }, 'Asset visual removido.').catch(() => {})}
-            onApprove={() => simpleAction(api.approve, 'Carrossel aprovado. Agora você pode agendar ou publicar teste.')}
-            onReject={() => simpleAction(api.reject, 'Carrossel rejeitado.')}
-            onSchedule={schedule}
-            onReschedule={reschedule}
-            onCancelPublication={cancelPublication}
-            onPublishNow={() => simpleAction(api.publishNow, 'Publicação teste concluída.')}
             loading={loading}
           />
           <LogsPanel logs={logs} selectedId={selectedId} />

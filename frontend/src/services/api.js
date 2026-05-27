@@ -77,12 +77,5 @@ export const api = {
   listAssets: (id) => request(`/carrosseis/${id}/assets`),
   deleteAsset: (id) => request(`/assets/${id}`, { method: 'DELETE' }),
   updateSlide: (id, payload) => json('PUT', `/slides/${id}`, payload),
-  approve: (id) => json('POST', `/carrosseis/${id}/aprovar`),
-  reject: (id) => json('POST', `/carrosseis/${id}/rejeitar`),
-  schedule: (id, payload) => json('POST', `/carrosseis/${id}/agendar`, payload),
-  reschedule: (id, payload) => json('PUT', `/publicacoes/${id}/reagendar`, payload),
-  cancelPublication: (id) => json('POST', `/publicacoes/${id}/cancelar`),
-  publishNow: (id) => json('POST', `/carrosseis/${id}/publicar-agora`),
-  listPublicacoes: () => request('/publicacoes'),
   listLogs: () => request('/logs'),
 };
