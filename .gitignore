@@ -9,8 +9,6 @@ storage/
 .idea/
 *.log
 
-celerybeat-schedule
-backend/celerybeat-schedule
 frontend/dist/
 frontend/node_modules/
 .venv/

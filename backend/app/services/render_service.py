@@ -1,17 +1,32 @@
 from datetime import datetime
+import hashlib
+import re
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageDraw, ImageFont
+from fastapi import HTTPException
+from openai import OpenAI
 from sqlalchemy.orm import Session
 
-from app.config import PUBLIC_BASE_URL, STORAGE_PATH
-from app.models.carrossel import Carrossel
+from app.config import OPENAI_ADMIN_IMAGE_RENDER_MAX_ATTEMPTS, OPENAI_IMAGE_MODEL, OPENAI_IMAGE_SIZE, PUBLIC_BASE_URL, STORAGE_PATH
+from app.models.carrossel import Carrossel, Usuario
+from app.services.image_asset_service import (
+    ASSET_CALL_STARTED,
+    _image_limit_status,
+    _image_response_to_bytes,
+    _limites_configurados,
+    openai_image_configurado,
+)
 from app.services.log_service import registrar_log
 
-CANVAS_SIZE = (1080, 1350)
-MARGIN = 86
-CONTENT_WIDTH = CANVAS_SIZE[0] - (MARGIN * 2)
+OPENAI_API_KEY = ""
+ASPECT_RATIO_OPTIONS = {
+    "1:1": {"label": "Quadrado 1:1", "width": 1080, "height": 1080, "description": "quadrado 1:1"},
+    "1.91:1": {"label": "Horizontal 1,91:1", "width": 1080, "height": 566, "description": "horizontal 1,91:1"},
+    "4:5": {"label": "Vertical 4:5", "width": 1080, "height": 1350, "description": "vertical 4:5"},
+}
+DEFAULT_ASPECT_RATIO = "4:5"
+
 DEFAULT_TEMPLATE = "mvp_deterministic_v1"
 DEFAULT_PRIMARY_COLOR = "#6f9684"
 
@@ -19,10 +34,7 @@ BACKGROUND = (248, 250, 247)
 INK = (23, 33, 31)
 MUTED = (92, 108, 103)
 MOSS = (111, 150, 132)
-STEEL = (67, 93, 116)
-LINE = (220, 226, 221)
 WHITE = (255, 255, 255)
-DARK = (18, 24, 27)
 
 TEMPLATES: dict[str, dict[str, Any]] = {
     DEFAULT_TEMPLATE: {
@@ -58,98 +70,6 @@ TEMPLATES: dict[str, dict[str, Any]] = {
 }
 
 
-def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf" if bold else "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-    ]
-    for candidate in candidates:
-        if Path(candidate).exists():
-            return ImageFont.truetype(candidate, size=size)
-    return ImageFont.load_default()
-
-
-def _line_height(font: ImageFont.FreeTypeFont | ImageFont.ImageFont, extra: int = 12) -> int:
-    bbox = font.getbbox("Ag")
-    return (bbox[3] - bbox[1]) + extra
-
-
-def _measure(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont | ImageFont.ImageFont) -> int:
-    bbox = draw.textbbox((0, 0), text, font=font)
-    return bbox[2] - bbox[0]
-
-
-def _wrap_long_word(draw: ImageDraw.ImageDraw, word: str, font: ImageFont.FreeTypeFont | ImageFont.ImageFont, width: int) -> list[str]:
-    chunks: list[str] = []
-    current = ""
-    for char in word:
-        candidate = f"{current}{char}"
-        if _measure(draw, candidate, font) <= width:
-            current = candidate
-        else:
-            if current:
-                chunks.append(current)
-            current = char
-    if current:
-        chunks.append(current)
-    return chunks
-
-
-def _wrap_text(text: str | None, font: ImageFont.FreeTypeFont | ImageFont.ImageFont, width: int) -> list[str]:
-    text = " ".join((text or "").split())
-    if not text:
-        return []
-
-    probe = Image.new("RGB", (1, 1))
-    draw = ImageDraw.Draw(probe)
-    lines: list[str] = []
-    current = ""
-
-    for word in text.split(" "):
-        candidate = f"{current} {word}".strip()
-        if _measure(draw, candidate, font) <= width:
-            current = candidate
-            continue
-
-        if current:
-            lines.append(current)
-            current = ""
-
-        if _measure(draw, word, font) <= width:
-            current = word
-        else:
-            chunks = _wrap_long_word(draw, word, font, width)
-            lines.extend(chunks[:-1])
-            current = chunks[-1] if chunks else ""
-
-    if current:
-        lines.append(current)
-    return lines
-
-
-def _draw_wrapped(
-    draw: ImageDraw.ImageDraw,
-    text: str | None,
-    *,
-    xy: tuple[int, int],
-    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
-    fill: tuple[int, int, int],
-    width: int,
-    max_lines: int,
-    line_gap: int = 12,
-) -> int:
-    x, y = xy
-    wrapped = _wrap_text(text, font, width)
-    lines = wrapped[:max_lines]
-    if len(wrapped) > max_lines and lines:
-        lines[-1] = lines[-1].rstrip(" .") + "..."
-    line_height = _line_height(font, line_gap)
-    for line in lines:
-        draw.text((x, y), line, font=font, fill=fill)
-        y += line_height
-    return y
-
 
 def _hex_to_rgb(value: str | None, fallback: str = DEFAULT_PRIMARY_COLOR) -> tuple[int, int, int]:
     raw = (value or fallback).strip()
@@ -165,14 +85,10 @@ def _rgb_to_hex(value: tuple[int, int, int]) -> str:
     return "#" + "".join(f"{part:02x}" for part in value)
 
 
-def _blend(a: tuple[int, int, int], b: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
-    return tuple(int(a[index] + (b[index] - a[index]) * amount) for index in range(3))
-
 
 def _template_name(template: str | None) -> str:
     candidate = (template or DEFAULT_TEMPLATE).strip()
     return candidate if candidate in TEMPLATES else DEFAULT_TEMPLATE
-
 
 def _text_or_fallback(*values: Any, fallback: str = "Content Carousel") -> str:
     for value in values:
@@ -183,8 +99,216 @@ def _text_or_fallback(*values: Any, fallback: str = "Content Carousel") -> str:
     return fallback
 
 
+def _aspect_ratio_config(aspect_ratio: str | None) -> dict[str, Any]:
+    return ASPECT_RATIO_OPTIONS.get(aspect_ratio or DEFAULT_ASPECT_RATIO, ASPECT_RATIO_OPTIONS[DEFAULT_ASPECT_RATIO])
+
+
 def _brand_text(carrossel: Carrossel, brand_name: str | None) -> str:
     return _text_or_fallback(brand_name, getattr(carrossel, "tema", None), fallback="Content Carousel")[:80]
+
+
+def _prompt_full_slide(carrossel: Carrossel, slide, *, brand: str, primary_color: str, aspect: dict[str, Any]) -> str:
+    secondary = (getattr(slide, "texto_secundario", None) or "").strip()
+    width = aspect["width"]
+    height = aspect["height"]
+    return f"""
+Crie UM slide final para redes sociais, pronto para uso, com estética editorial premium.
+Formato: imagem {aspect["description"]}, canvas {width}x{height}px, composição moderna, forte hierarquia visual, margens seguras e alta legibilidade.
+
+Contexto do carrossel:
+- Título: {getattr(carrossel, 'titulo', None) or 'Carrossel'}
+- Tema: {getattr(carrossel, 'tema', None) or 'conteúdo editorial'}
+- Tom: {getattr(carrossel, 'tom', None) or 'profissional, claro e envolvente'}
+- Público-alvo: {getattr(carrossel, 'publico_alvo', None) or 'público geral'}
+- Marca/assinatura: {brand}
+- Cor principal sugerida: {primary_color}
+
+Campos obrigatórios do slide, que devem aparecer exatamente como fornecidos:
+- titulo: {getattr(slide, 'titulo', None) or getattr(carrossel, 'titulo', None) or ''}
+- texto_principal: {getattr(slide, 'texto_principal', None) or ''}
+- texto_secundario: {secondary}
+- observacao_visual: {getattr(slide, 'observacao_visual', None) or 'visual editorial forte e coerente com o tema'}
+
+Regras obrigatórias:
+- Use OPENAI_IMAGE_MODEL/DALL·E para gerar uma imagem final no formato {aspect["description"]}, com enquadramento visual equivalente a {width}x{height}px, usando OPENAI_IMAGE_SIZE como referência técnica.
+- Renderize o título, texto principal e texto secundário dentro da imagem, totalmente contidos no quadro visível de {width}x{height}px.
+- Use margens seguras de pelo menos 10-12% em todos os lados.
+- Quebre linhas e use hierarquia visual clara para que nenhum texto seja cortado, encoste nas bordas ou saia do quadro.
+- Renderize titulo, texto_principal e texto_secundario exatamente como fornecidos nos campos acima, sem alterar, reduzir, reescrever, resumir, traduzir ou acrescentar palavras.
+- Se texto_secundario estiver vazio, não invente texto secundário.
+- Use observacao_visual como direção criativa para cenário, estilo, composição, cores, textura e elementos visuais.
+- Mantenha a proporção {aspect["description"]}, margens seguras, contraste suficiente, espaçamento confortável e legibilidade alta.
+- Use imagens, ilustração ou fotografia como parte da composição, sem prejudicar a leitura dos textos.
+- Não use logotipos reais, marcas registradas nem pessoas identificáveis.
+""".strip()
+
+
+def _prompt_hash(prompt: str) -> str:
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
+
+def _save_full_slide_bytes(content: bytes, output_path: Path) -> None:
+    # temporary: use OpenAI bytes only; revert when Pillow improvements done.
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(content)
+
+
+def _openai_status_code(exc: Exception) -> int | None:
+    status = getattr(exc, "status_code", None)
+    if status is not None:
+        return int(status)
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    return int(status) if status is not None else None
+
+
+def _redact_secret(value: str) -> str:
+    return re.sub(r"sk-[A-Za-z0-9_\-]+", "sk-***", value)
+
+
+def _openai_raw_error(exc: Exception) -> str:
+    body = getattr(exc, "body", None)
+    if body:
+        return _redact_secret(str(body))
+    response = getattr(exc, "response", None)
+    text = getattr(response, "text", None)
+    if text:
+        return _redact_secret(str(text))
+    return _redact_secret(str(exc))
+
+
+def _openai_error_message(exc: Exception) -> str:
+    status_code = _openai_status_code(exc)
+    raw_error = _openai_raw_error(exc)
+    if status_code == 401:
+        return f"Chave OpenAI inválida ou expirada. Atualize OPENAI_API_KEY. Detalhe OpenAI: {raw_error}"
+    if status_code == 429:
+        return f"Limite de geração de imagem da OpenAI atingido. Detalhe OpenAI: {raw_error}"
+    if status_code is not None:
+        return f"Falha na OpenAI ao gerar imagem do slide (status {status_code}). Detalhe OpenAI: {raw_error}"
+    return f"Falha na OpenAI ao gerar imagem do slide. Detalhe OpenAI: {raw_error}"
+
+
+def _raise_openai_render_error(db: Session, carrossel: Carrossel, slide, exc: Exception, *, prompt_hash: str, attempt: int) -> None:
+    status_code = _openai_status_code(exc) or 502
+    message = _openai_error_message(exc)
+    registrar_log(
+        db,
+        carrossel_id=carrossel.id,
+        etapa="renderizacao",
+        status="OPENAI_FULL_SLIDE_ERRO",
+        mensagem=message,
+        detalhes={
+            "slide_id": getattr(slide, "id", None),
+            "numero_slide": slide.numero_slide,
+            "attempt": attempt,
+            "status_code": status_code,
+            "modelo": OPENAI_IMAGE_MODEL,
+            "prompt_hash": prompt_hash,
+        },
+    )
+    raise HTTPException(status_code=status_code, detail=message)
+
+
+def _render_slide_with_openai(
+    db: Session,
+    carrossel: Carrossel,
+    slide,
+    output_path: Path,
+    *,
+    brand: str,
+    primary_color: str,
+    api_key: str | None,
+    usuario: Usuario | None = None,
+    max_attempts: int = 1,
+    aspect: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    effective_api_key = api_key if api_key is not None else (OPENAI_API_KEY or None)
+    if not openai_image_configurado(effective_api_key):
+        return None
+
+    limit_status = _image_limit_status(db, carrossel, usuario=usuario)
+    if limit_status is not None:
+        registrar_log(
+            db,
+            carrossel_id=carrossel.id,
+            etapa="renderizacao",
+            status="OPENAI_FULL_SLIDE_ERRO",
+            mensagem="Limite de geração de imagem da OpenAI atingido; renderização abortada.",
+            detalhes={"slide_id": getattr(slide, "id", None), "numero_slide": slide.numero_slide, "limit": limit_status},
+        )
+        raise HTTPException(status_code=429, detail="Limite de geração de imagem da OpenAI atingido. Tente novamente mais tarde ou ajuste os limites.")
+
+    aspect_config = aspect or ASPECT_RATIO_OPTIONS[DEFAULT_ASPECT_RATIO]
+    prompt = _prompt_full_slide(carrossel, slide, brand=brand, primary_color=primary_color, aspect=aspect_config)
+    prompt_hash = _prompt_hash(prompt)
+    client = OpenAI(api_key=effective_api_key)
+    last_error: Exception | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        registrar_log(
+            db,
+            carrossel_id=carrossel.id,
+            etapa="asset_ia",
+            status=ASSET_CALL_STARTED,
+            mensagem="Renderização de slide completo com OpenAI iniciada.",
+            detalhes={
+                "modelo": OPENAI_IMAGE_MODEL,
+                "size": OPENAI_IMAGE_SIZE,
+                "aspect_ratio": aspect_config["label"],
+                "canvas": {"width": aspect_config["width"], "height": aspect_config["height"]},
+                "slide_id": getattr(slide, "id", None),
+                "numero_slide": slide.numero_slide,
+                "prompt_hash": prompt_hash,
+                "attempt": attempt,
+                "limites": _limites_configurados(usuario=usuario, carrossel=carrossel),
+            },
+        )
+        try:
+            response = client.images.generate(
+                model=OPENAI_IMAGE_MODEL,
+                prompt=prompt,
+                size=OPENAI_IMAGE_SIZE,
+                n=1,
+            )
+            content, provider_metadata = _image_response_to_bytes(response)
+            _save_full_slide_bytes(content, output_path)
+            break
+        except Exception as exc:
+            last_error = exc
+            if _openai_status_code(exc) == 401 or attempt == max_attempts:
+                _raise_openai_render_error(db, carrossel, slide, exc, prompt_hash=prompt_hash, attempt=attempt)
+    else:
+        if last_error is not None:
+            _raise_openai_render_error(db, carrossel, slide, last_error, prompt_hash=prompt_hash, attempt=max_attempts)
+        raise HTTPException(status_code=502, detail="Falha na OpenAI ao gerar imagem do slide.")
+
+    registrar_log(
+        db,
+        carrossel_id=carrossel.id,
+        etapa="renderizacao",
+        status="OPENAI_FULL_SLIDE_CONCLUIDO",
+        mensagem="Slide completo renderizado com OpenAI.",
+        detalhes={
+            "slide_id": getattr(slide, "id", None),
+            "numero_slide": slide.numero_slide,
+            "modelo": OPENAI_IMAGE_MODEL,
+            "prompt_hash": prompt_hash,
+        },
+    )
+    return {
+        "renderer": "openai_full_slide",
+        "provider": "openai",
+        "image_model": OPENAI_IMAGE_MODEL,
+        "image_size": OPENAI_IMAGE_SIZE,
+        "aspect_ratio": aspect_config["label"],
+        "aspect_ratio_value": next((key for key, value in ASPECT_RATIO_OPTIONS.items() if value == aspect_config), DEFAULT_ASPECT_RATIO),
+        "canvas": {"width": aspect_config["width"], "height": aspect_config["height"]},
+        "resize_strategy": "openai_bytes_only",
+        "image_prompt": prompt,
+        "image_prompt_hash": prompt_hash,
+        "provider_response": provider_metadata,
+    }
 
 
 def _relative_slide_path(carrossel_id: int, numero_slide: int) -> Path:
@@ -197,235 +321,6 @@ def _public_url(relative_path: Path, version: str) -> str:
     return f"{base}{path}" if base else path
 
 
-def _resolve_storage_path(relative_path: str | None) -> Path | None:
-    if not relative_path:
-        return None
-    path = Path(relative_path)
-    if path.is_absolute():
-        return None
-    storage_root = Path(STORAGE_PATH).resolve()
-    resolved = (storage_root / path).resolve()
-    if storage_root == resolved or storage_root not in resolved.parents:
-        return None
-    return resolved
-
-
-def _load_asset_image(asset_path: str | None) -> Image.Image | None:
-    resolved = _resolve_storage_path(asset_path)
-    if resolved is None or not resolved.exists():
-        return None
-    try:
-        return Image.open(resolved).convert("RGB")
-    except OSError:
-        return None
-
-
-def _cover_resize(image: Image.Image, size: tuple[int, int]) -> Image.Image:
-    target_w, target_h = size
-    source_w, source_h = image.size
-    scale = max(target_w / source_w, target_h / source_h)
-    resized = image.resize((int(source_w * scale), int(source_h * scale)))
-    left = max(0, (resized.width - target_w) // 2)
-    top = max(0, (resized.height - target_h) // 2)
-    return resized.crop((left, top, left + target_w, top + target_h))
-
-
-def _paste_asset_panel(
-    image: Image.Image,
-    asset_image: Image.Image | None,
-    box: tuple[int, int, int, int],
-    *,
-    radius: int,
-    opacity: float,
-) -> None:
-    if asset_image is None:
-        return
-    x1, y1, x2, y2 = box
-    panel = _cover_resize(asset_image, (x2 - x1, y2 - y1)).convert("RGBA")
-    if opacity < 1:
-        alpha = panel.getchannel("A").point(lambda value: int(value * opacity))
-        panel.putalpha(alpha)
-    mask = Image.new("L", panel.size, 0)
-    mask_draw = ImageDraw.Draw(mask)
-    mask_draw.rounded_rectangle((0, 0, panel.size[0], panel.size[1]), radius=radius, fill=255)
-    image.paste(panel.convert("RGB"), (x1, y1), mask)
-
-
-def _draw_footer(draw: ImageDraw.ImageDraw, *, brand: str, accent: tuple[int, int, int], fill: tuple[int, int, int]) -> None:
-    small_font = _font(23)
-    tiny_font = _font(19)
-    draw.text((MARGIN, 1262), brand, font=small_font, fill=fill)
-    draw.rounded_rectangle((CANVAS_SIZE[0] - MARGIN - 142, 1258, CANVAS_SIZE[0] - MARGIN, 1292), radius=17, fill=accent)
-    draw.text((CANVAS_SIZE[0] - MARGIN - 118, 1264), "preview", font=tiny_font, fill=WHITE)
-
-
-def _draw_mvp_template(image: Image.Image, carrossel: Carrossel, slide, *, brand: str, accent: tuple[int, int, int], asset_image: Image.Image | None = None) -> None:
-    draw = ImageDraw.Draw(image)
-    title_font = _font(58, bold=True)
-    main_font = _font(44, bold=True)
-    secondary_font = _font(31)
-    small_font = _font(24)
-    tiny_font = _font(20)
-
-    draw.rectangle((0, 0, CANVAS_SIZE[0], 22), fill=accent)
-    draw.rounded_rectangle((MARGIN, 70, CANVAS_SIZE[0] - MARGIN, CANVAS_SIZE[1] - 70), radius=36, fill=WHITE, outline=LINE, width=2)
-    _paste_asset_panel(image, asset_image, (MARGIN + 44, 810, CANVAS_SIZE[0] - MARGIN - 44, 1020), radius=28, opacity=0.62)
-    draw.rounded_rectangle((MARGIN + 34, 112, MARGIN + 122, 168), radius=18, fill=_blend(accent, WHITE, 0.82))
-    draw.text((MARGIN + 58, 126), f"{slide.numero_slide:02d}", font=small_font, fill=accent)
-
-    y = 205
-    y = _draw_wrapped(draw, slide.titulo or getattr(carrossel, "titulo", None), xy=(MARGIN + 44, y), font=title_font, fill=INK, width=CONTENT_WIDTH - 88, max_lines=3, line_gap=16)
-    y += 44
-    draw.line((MARGIN + 44, y, CANVAS_SIZE[0] - MARGIN - 44, y), fill=LINE, width=2)
-    y += 58
-    y = _draw_wrapped(draw, slide.texto_principal, xy=(MARGIN + 44, y), font=main_font, fill=INK, width=CONTENT_WIDTH - 88, max_lines=7, line_gap=18)
-
-    if slide.texto_secundario:
-        y += 34
-        _draw_wrapped(draw, slide.texto_secundario, xy=(MARGIN + 44, y), font=secondary_font, fill=MUTED, width=CONTENT_WIDTH - 88, max_lines=3, line_gap=14)
-
-    note_top = 1040
-    draw.rounded_rectangle((MARGIN + 44, note_top, CANVAS_SIZE[0] - MARGIN - 44, 1190), radius=24, fill=(244, 247, 245), outline=LINE, width=1)
-    draw.text((MARGIN + 70, note_top + 24), "Briefing visual", font=tiny_font, fill=STEEL)
-    _draw_wrapped(draw, slide.observacao_visual, xy=(MARGIN + 70, note_top + 58), font=small_font, fill=MUTED, width=CONTENT_WIDTH - 140, max_lines=3, line_gap=8)
-    _draw_footer(draw, brand=brand, accent=accent, fill=accent)
-
-
-def _draw_clean_editorial(image: Image.Image, carrossel: Carrossel, slide, *, brand: str, accent: tuple[int, int, int], asset_image: Image.Image | None = None) -> None:
-    draw = ImageDraw.Draw(image)
-    title_font = _font(64, bold=True)
-    main_font = _font(40, bold=True)
-    body_font = _font(29)
-    small_font = _font(22)
-    eyebrow_font = _font(20, bold=True)
-    ink = TEMPLATES["clean_editorial"]["ink"]
-    muted = TEMPLATES["clean_editorial"]["muted"]
-    paper = TEMPLATES["clean_editorial"]["paper"]
-
-    draw.rectangle((0, 0, CANVAS_SIZE[0], CANVAS_SIZE[1]), fill=TEMPLATES["clean_editorial"]["background"])
-    draw.rounded_rectangle((MARGIN, 82, CANVAS_SIZE[0] - MARGIN, 1210), radius=28, fill=paper, outline=(226, 229, 224), width=2)
-    draw.rectangle((MARGIN, 82, MARGIN + 14, 1210), fill=accent)
-    _paste_asset_panel(image, asset_image, (MARGIN + 52, 760, CANVAS_SIZE[0] - MARGIN - 52, 1000), radius=24, opacity=0.72)
-    draw.text((MARGIN + 52, 132), f"SLIDE {slide.numero_slide:02d}", font=eyebrow_font, fill=accent)
-    draw.text((CANVAS_SIZE[0] - MARGIN - 240, 132), brand, font=small_font, fill=muted)
-
-    y = 210
-    y = _draw_wrapped(draw, slide.titulo or getattr(carrossel, "titulo", None), xy=(MARGIN + 52, y), font=title_font, fill=ink, width=CONTENT_WIDTH - 104, max_lines=3, line_gap=18)
-    y += 38
-    draw.line((MARGIN + 52, y, MARGIN + 260, y), fill=accent, width=5)
-    y += 52
-    y = _draw_wrapped(draw, slide.texto_principal, xy=(MARGIN + 52, y), font=main_font, fill=ink, width=CONTENT_WIDTH - 104, max_lines=8, line_gap=17)
-
-    if slide.texto_secundario:
-        y += 32
-        _draw_wrapped(draw, slide.texto_secundario, xy=(MARGIN + 52, y), font=body_font, fill=muted, width=CONTENT_WIDTH - 104, max_lines=4, line_gap=13)
-
-    draw.rounded_rectangle((MARGIN + 52, 1020, CANVAS_SIZE[0] - MARGIN - 52, 1148), radius=20, fill=_blend(accent, WHITE, 0.9))
-    draw.text((MARGIN + 78, 1043), "Direção visual", font=eyebrow_font, fill=accent)
-    _draw_wrapped(draw, slide.observacao_visual, xy=(MARGIN + 78, 1074), font=small_font, fill=muted, width=CONTENT_WIDTH - 156, max_lines=2, line_gap=8)
-    _draw_footer(draw, brand=brand, accent=accent, fill=muted)
-
-
-def _draw_bold_contrast(image: Image.Image, carrossel: Carrossel, slide, *, brand: str, accent: tuple[int, int, int], asset_image: Image.Image | None = None) -> None:
-    draw = ImageDraw.Draw(image)
-    title_font = _font(76, bold=True)
-    main_font = _font(46, bold=True)
-    body_font = _font(31)
-    small_font = _font(23)
-    mini_font = _font(20, bold=True)
-    bg = TEMPLATES["bold_contrast"]["background"]
-    muted = TEMPLATES["bold_contrast"]["muted"]
-
-    draw.rectangle((0, 0, CANVAS_SIZE[0], CANVAS_SIZE[1]), fill=bg)
-    _paste_asset_panel(image, asset_image, (0, 34, CANVAS_SIZE[0], CANVAS_SIZE[1]), radius=0, opacity=0.25)
-    draw.rectangle((0, 0, CANVAS_SIZE[0], 34), fill=accent)
-    draw.ellipse((CANVAS_SIZE[0] - 360, 110, CANVAS_SIZE[0] + 180, 650), fill=_blend(accent, bg, 0.42))
-    draw.rounded_rectangle((MARGIN, 108, MARGIN + 132, 164), radius=18, fill=accent)
-    draw.text((MARGIN + 28, 123), f"{slide.numero_slide:02d}", font=small_font, fill=bg)
-    draw.text((MARGIN + 160, 124), brand.upper(), font=mini_font, fill=muted)
-
-    y = 232
-    y = _draw_wrapped(draw, slide.titulo or getattr(carrossel, "titulo", None), xy=(MARGIN, y), font=title_font, fill=WHITE, width=CONTENT_WIDTH, max_lines=3, line_gap=14)
-    y += 54
-    y = _draw_wrapped(draw, slide.texto_principal, xy=(MARGIN, y), font=main_font, fill=WHITE, width=CONTENT_WIDTH, max_lines=7, line_gap=20)
-
-    if slide.texto_secundario:
-        y += 34
-        _draw_wrapped(draw, slide.texto_secundario, xy=(MARGIN, y), font=body_font, fill=muted, width=CONTENT_WIDTH, max_lines=4, line_gap=13)
-
-    draw.rounded_rectangle((MARGIN, 1060, CANVAS_SIZE[0] - MARGIN, 1192), radius=22, fill=(30, 38, 46), outline=_blend(accent, WHITE, 0.25), width=2)
-    draw.text((MARGIN + 30, 1085), "BRIEFING", font=mini_font, fill=accent)
-    _draw_wrapped(draw, slide.observacao_visual, xy=(MARGIN + 30, 1117), font=small_font, fill=muted, width=CONTENT_WIDTH - 60, max_lines=2, line_gap=8)
-    _draw_footer(draw, brand=brand, accent=accent, fill=muted)
-
-
-def _draw_soft_brand(image: Image.Image, carrossel: Carrossel, slide, *, brand: str, accent: tuple[int, int, int], asset_image: Image.Image | None = None) -> None:
-    draw = ImageDraw.Draw(image)
-    title_font = _font(60, bold=True)
-    main_font = _font(39, bold=True)
-    body_font = _font(30)
-    small_font = _font(23)
-    tiny_font = _font(19, bold=True)
-    bg = TEMPLATES["soft_brand"]["background"]
-    ink = TEMPLATES["soft_brand"]["ink"]
-    muted = TEMPLATES["soft_brand"]["muted"]
-    tint = _blend(accent, WHITE, 0.84)
-
-    draw.rectangle((0, 0, CANVAS_SIZE[0], CANVAS_SIZE[1]), fill=bg)
-    draw.rounded_rectangle((MARGIN, 78, CANVAS_SIZE[0] - MARGIN, 1235), radius=42, fill=_blend(tint, WHITE, 0.62))
-    _paste_asset_panel(image, asset_image, (MARGIN + 56, 770, CANVAS_SIZE[0] - MARGIN - 56, 995), radius=30, opacity=0.70)
-    draw.rounded_rectangle((MARGIN + 34, 120, CANVAS_SIZE[0] - MARGIN - 34, 224), radius=30, fill=WHITE)
-    draw.rounded_rectangle((MARGIN + 60, 145, MARGIN + 162, 198), radius=18, fill=accent)
-    draw.text((MARGIN + 91, 158), f"{slide.numero_slide:02d}", font=small_font, fill=WHITE)
-    draw.text((MARGIN + 190, 156), brand, font=small_font, fill=muted)
-
-    y = 286
-    y = _draw_wrapped(draw, slide.titulo or getattr(carrossel, "titulo", None), xy=(MARGIN + 56, y), font=title_font, fill=ink, width=CONTENT_WIDTH - 112, max_lines=3, line_gap=17)
-    y += 36
-    draw.rounded_rectangle((MARGIN + 56, y, CANVAS_SIZE[0] - MARGIN - 56, min(y + 430, 880)), radius=30, fill=WHITE)
-    y += 40
-    y = _draw_wrapped(draw, slide.texto_principal, xy=(MARGIN + 92, y), font=main_font, fill=ink, width=CONTENT_WIDTH - 184, max_lines=7, line_gap=17)
-
-    if slide.texto_secundario:
-        y += 28
-        _draw_wrapped(draw, slide.texto_secundario, xy=(MARGIN + 92, y), font=body_font, fill=muted, width=CONTENT_WIDTH - 184, max_lines=3, line_gap=12)
-
-    draw.rounded_rectangle((MARGIN + 56, 1010, CANVAS_SIZE[0] - MARGIN - 56, 1155), radius=28, fill=_blend(accent, WHITE, 0.78))
-    draw.text((MARGIN + 88, 1035), "NOTA VISUAL", font=tiny_font, fill=accent)
-    _draw_wrapped(draw, slide.observacao_visual, xy=(MARGIN + 88, 1070), font=small_font, fill=muted, width=CONTENT_WIDTH - 176, max_lines=3, line_gap=8)
-    _draw_footer(draw, brand=brand, accent=accent, fill=muted)
-
-
-def _render_slide_image(
-    carrossel: Carrossel,
-    slide,
-    output_path: Path,
-    *,
-    template: str,
-    brand_name: str | None,
-    primary_color: str | None,
-    asset_image: Image.Image | None = None,
-    asset_id: int | None = None,
-) -> dict[str, Any]:
-    template_config = TEMPLATES[template]
-    fallback_color = template_config.get("default_color", DEFAULT_PRIMARY_COLOR)
-    accent = _hex_to_rgb(primary_color, fallback_color)
-    brand = _brand_text(carrossel, brand_name)
-    image = Image.new("RGB", CANVAS_SIZE, template_config.get("background", BACKGROUND))
-
-    if template == "clean_editorial":
-        _draw_clean_editorial(image, carrossel, slide, brand=brand, accent=accent, asset_image=asset_image)
-    elif template == "bold_contrast":
-        _draw_bold_contrast(image, carrossel, slide, brand=brand, accent=accent, asset_image=asset_image)
-    elif template == "soft_brand":
-        _draw_soft_brand(image, carrossel, slide, brand=brand, accent=accent, asset_image=asset_image)
-    else:
-        _draw_mvp_template(image, carrossel, slide, brand=brand, accent=accent, asset_image=asset_image)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(output_path, format="PNG", optimize=True)
-    return {"template": template, "brand_name": brand, "primary_color": _rgb_to_hex(accent), "asset_id": asset_id}
-
 
 def renderizar_carrossel_slides(
     db: Session,
@@ -435,46 +330,100 @@ def renderizar_carrossel_slides(
     brand_name: str | None = None,
     primary_color: str | None = None,
     asset=None,
+    api_key: str | None = None,
+    usuario: Usuario | None = None,
+    aspect_ratio: str | None = None,
 ) -> Carrossel:
     selected_template = _template_name(template)
-    asset_image = _load_asset_image(getattr(asset, "asset_path", None)) if asset is not None else None
-    asset_id = getattr(asset, "id", None) if asset is not None else None
+    if asset is not None:
+        # temporary: asset-based Pillow render is disabled while slides are OpenAI-only.
+        raise HTTPException(
+            status_code=409,
+            detail="Renderização com asset selecionado está temporariamente indisponível no modo OpenAI-only. Remova o asset_id e renderize novamente.",
+        )
+
+    effective_api_key = api_key if api_key is not None else (OPENAI_API_KEY or None)
+    if not openai_image_configurado(effective_api_key):
+        raise HTTPException(status_code=409, detail="Configure sua OPENAI_API_KEY na tela de configurações antes de renderizar com IA.")
+
     registrar_log(
         db,
         carrossel_id=carrossel.id,
         etapa="renderizacao",
         status="INICIADO",
-        mensagem="Renderização determinística dos slides iniciada.",
-        detalhes={"slides": len(carrossel.slides), "template": selected_template, "asset_id": asset_id},
+        mensagem="Renderização OpenAI-only dos slides iniciada.",
+        detalhes={"slides": len(carrossel.slides), "template": selected_template, "renderer": "openai_full_slide"},
     )
 
     storage_root = Path(STORAGE_PATH).resolve()
     version = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    brand = _brand_text(carrossel, brand_name)
+    accent = _hex_to_rgb(primary_color, TEMPLATES[selected_template].get("default_color", DEFAULT_PRIMARY_COLOR))
+    primary_hex = _rgb_to_hex(accent)
+    max_attempts = OPENAI_ADMIN_IMAGE_RENDER_MAX_ATTEMPTS if bool(getattr(usuario, "is_admin", False)) else 1
+    aspect_config = _aspect_ratio_config(aspect_ratio)
 
-    for slide in carrossel.slides:
-        relative_path = _relative_slide_path(carrossel.id, slide.numero_slide)
-        output_path = storage_root / relative_path
-        render_options = _render_slide_image(
-            carrossel,
-            slide,
-            output_path,
-            template=selected_template,
-            brand_name=brand_name,
-            primary_color=primary_color,
-            asset_image=asset_image,
-            asset_id=asset_id,
-        )
+    generated_slides: list[tuple[Any, Path, Path, Path, dict[str, Any]]] = []
+    temp_paths: list[Path] = []
+    try:
+        for slide in carrossel.slides:
+            relative_path = _relative_slide_path(carrossel.id, slide.numero_slide)
+            output_path = storage_root / relative_path
+            temp_path = output_path.with_name(f".{output_path.stem}-openai-{version}.tmp.png")
+            temp_paths.append(temp_path)
+            render_options = _render_slide_with_openai(
+                db,
+                carrossel,
+                slide,
+                temp_path,
+                brand=brand,
+                primary_color=primary_hex,
+                api_key=effective_api_key,
+                usuario=usuario,
+                max_attempts=max_attempts,
+                aspect=aspect_config,
+            )
+            generated_slides.append((slide, relative_path, output_path, temp_path, {
+                "template": selected_template,
+                "brand_name": brand,
+                "primary_color": primary_hex,
+                "asset_id": None,
+                **(render_options or {}),
+            }))
+    except Exception:
+        for temp_path in temp_paths:
+            temp_path.unlink(missing_ok=True)
+        raise
+
+    for slide, relative_path, output_path, temp_path, render_options in generated_slides:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path.replace(output_path)
         slide.imagem_path = relative_path.as_posix()
         slide.imagem_url = _public_url(relative_path, version)
         layout_config = slide.layout_config or {}
         slide.layout_config = {
             **layout_config,
-            "renderer": "pillow",
+            "renderer": "openai_full_slide",
             "template": render_options["template"],
             "brand_name": render_options["brand_name"],
             "primary_color": render_options["primary_color"],
-            "asset_id": render_options["asset_id"],
-            "canvas": {"width": CANVAS_SIZE[0], "height": CANVAS_SIZE[1]},
+            "asset_id": None,
+            "slide_asset_id": None,
+            "slide_asset_path": None,
+            "slide_asset_prompt": None,
+            "slide_asset_prompt_hash": None,
+            "provider": render_options.get("provider"),
+            "image_model": render_options.get("image_model"),
+            "image_size": render_options.get("image_size"),
+            "resize_strategy": render_options.get("resize_strategy"),
+            "image_prompt": render_options.get("image_prompt"),
+            "image_prompt_hash": render_options.get("image_prompt_hash"),
+            "fallback_reason": None,
+            "fallback_error": None,
+            "limit": None,
+            "aspect_ratio": render_options.get("aspect_ratio"),
+            "aspect_ratio_value": render_options.get("aspect_ratio_value"),
+            "canvas": render_options.get("canvas"),
             "rendered_at": datetime.utcnow().isoformat(),
         }
 
@@ -483,7 +432,7 @@ def renderizar_carrossel_slides(
         carrossel_id=carrossel.id,
         etapa="renderizacao",
         status="CONCLUIDO",
-        mensagem="Renderização determinística dos slides concluída.",
-        detalhes={"slides_renderizados": len(carrossel.slides), "template": selected_template, "asset_id": asset_id},
+        mensagem="Renderização OpenAI-only dos slides concluída.",
+        detalhes={"slides_renderizados": len(carrossel.slides), "template": selected_template, "aspect_ratio": aspect_config["label"], "canvas": {"width": aspect_config["width"], "height": aspect_config["height"]}},
     )
     return carrossel

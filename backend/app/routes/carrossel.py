@@ -1,8 +1,12 @@
 from datetime import datetime
+from io import BytesIO
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
+from fastapi.responses import StreamingResponse
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
+from app.config import STORAGE_PATH
 from app.database import get_db
 from app.models.carrossel import (
     ASSET_STATUS_ATIVO,
@@ -10,42 +14,36 @@ from app.models.carrossel import (
     CarrosselAsset,
     CarrosselSlide,
     LogExecucao,
-    Publicacao,
-    STATUS_AGENDADO,
+    Usuario,
     STATUS_AGUARDANDO_APROVACAO,
-    STATUS_APROVADO,
-    STATUS_CANCELADO,
-    STATUS_PUBLICADO,
-    STATUS_REJEITADO,
 )
 from app.schemas.carrossel import (
-    AgendamentoCreate,
     AssetVisualRead,
     CarrosselCreate,
     CarrosselRead,
     CarrosselUpdate,
     LogExecucaoRead,
-    PublicacaoRead,
-    ReagendamentoUpdate,
     RenderizacaoCreate,
     SlideRead,
     SlideUpdate,
 )
 from app.services.generation_service import gerar_carrossel_textual
+from app.services.export_service import export_carousel_to_zip
 from app.services.image_asset_service import gerar_asset_visual, remover_asset_visual
 from app.services.log_service import registrar_log
-from app.services.publication_service import publicar_mockado
-from app.security import require_admin_token
+from app.security import get_current_user
 from app.services.render_service import renderizar_carrossel_slides
+from app.services.user_config_service import credentials_for_user
 
-router = APIRouter(dependencies=[Depends(require_admin_token)])
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
-def buscar_carrossel(db: Session, carrossel_id: int) -> Carrossel:
+def buscar_carrossel(db: Session, carrossel_id: int, usuario: Usuario) -> Carrossel:
     carrossel = (
         db.query(Carrossel)
-        .options(joinedload(Carrossel.slides), joinedload(Carrossel.publicacoes), joinedload(Carrossel.assets))
+        .options(joinedload(Carrossel.slides), joinedload(Carrossel.assets))
         .filter(Carrossel.id == carrossel_id)
+        .filter(Carrossel.usuario_id == usuario.id)
         .first()
     )
     if carrossel is None:
@@ -53,24 +51,24 @@ def buscar_carrossel(db: Session, carrossel_id: int) -> Carrossel:
     return carrossel
 
 
-def buscar_publicacao(db: Session, publicacao_id: int) -> Publicacao:
-    publicacao = db.query(Publicacao).filter(Publicacao.id == publicacao_id).first()
-    if publicacao is None:
-        raise HTTPException(status_code=404, detail="Publicação não encontrada.")
-    return publicacao
-
-
-def buscar_asset(db: Session, asset_id: int) -> CarrosselAsset:
-    asset = db.query(CarrosselAsset).filter(CarrosselAsset.id == asset_id).first()
+def buscar_asset(db: Session, asset_id: int, usuario: Usuario) -> CarrosselAsset:
+    asset = (
+        db.query(CarrosselAsset)
+        .join(Carrossel, CarrosselAsset.carrossel_id == Carrossel.id)
+        .filter(CarrosselAsset.id == asset_id)
+        .filter(Carrossel.usuario_id == usuario.id)
+        .first()
+    )
     if asset is None:
         raise HTTPException(status_code=404, detail="Asset visual não encontrado.")
     return asset
 
 
 @router.post("/carrosseis", response_model=CarrosselRead, status_code=status.HTTP_201_CREATED)
-def criar_carrossel(payload: CarrosselCreate, db: Session = Depends(get_db)):
+def criar_carrossel(payload: CarrosselCreate, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
     dados = payload.model_dump(exclude={"observacoes_adicionais"})
     carrossel = Carrossel(
+        usuario_id=usuario.id,
         **dados,
         prompt_config={"observacoes_adicionais": payload.observacoes_adicionais}
         if payload.observacoes_adicionais
@@ -91,10 +89,11 @@ def criar_carrossel(payload: CarrosselCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/carrosseis", response_model=list[CarrosselRead])
-def listar_carrosseis(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def listar_carrosseis(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
     return (
         db.query(Carrossel)
-        .options(joinedload(Carrossel.slides), joinedload(Carrossel.publicacoes), joinedload(Carrossel.assets))
+        .options(joinedload(Carrossel.slides), joinedload(Carrossel.assets))
+        .filter(Carrossel.usuario_id == usuario.id)
         .order_by(Carrossel.created_at.desc())
         .offset(skip)
         .limit(limit)
@@ -103,8 +102,21 @@ def listar_carrosseis(skip: int = 0, limit: int = 100, db: Session = Depends(get
 
 
 @router.get("/carrosseis/{carrossel_id}", response_model=CarrosselRead)
-def obter_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
-    return buscar_carrossel(db, carrossel_id)
+def obter_carrossel(carrossel_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
+    return buscar_carrossel(db, carrossel_id, usuario)
+
+
+@router.get("/carrosseis/{carrossel_id}/exportar")
+def exportar_carrossel(carrossel_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
+    carrossel = buscar_carrossel(db, carrossel_id, usuario)
+    try:
+        zip_bytes = export_carousel_to_zip(db, carrossel, STORAGE_PATH)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    filename = f"carousel_{carrossel.id}_{timestamp}.zip"
+    headers = {"Content-Disposition": f"attachment; filename=\"{filename}\""}
+    return StreamingResponse(BytesIO(zip_bytes), media_type="application/zip", headers=headers)
 
 
 @router.put("/carrosseis/{carrossel_id}", response_model=CarrosselRead)
@@ -112,8 +124,9 @@ def atualizar_carrossel(
     carrossel_id: int,
     payload: CarrosselUpdate,
     db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_current_user),
 ):
-    carrossel = buscar_carrossel(db, carrossel_id)
+    carrossel = buscar_carrossel(db, carrossel_id, usuario)
     for campo, valor in payload.model_dump(exclude_unset=True).items():
         setattr(carrossel, campo, valor)
     registrar_log(
@@ -130,49 +143,50 @@ def atualizar_carrossel(
 
 
 @router.delete("/carrosseis/{carrossel_id}", status_code=status.HTTP_204_NO_CONTENT)
-def remover_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
-    carrossel = buscar_carrossel(db, carrossel_id)
+def remover_carrossel(carrossel_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
+    carrossel = buscar_carrossel(db, carrossel_id, usuario)
     db.delete(carrossel)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/carrosseis/{carrossel_id}/gerar", response_model=CarrosselRead)
-def gerar_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
-    carrossel = buscar_carrossel(db, carrossel_id)
+def gerar_carrossel(carrossel_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
+    carrossel = buscar_carrossel(db, carrossel_id, usuario)
     if carrossel.slides:
         raise HTTPException(
             status_code=409,
             detail="Carrossel já possui slides. Use /regenerar para substituir.",
         )
-    gerar_carrossel_textual(db, carrossel, regenerar=False)
+    gerar_carrossel_textual(db, carrossel, credentials=credentials_for_user(db, usuario), regenerar=False, usuario=usuario)
     db.commit()
     db.refresh(carrossel)
-    return buscar_carrossel(db, carrossel.id)
+    return buscar_carrossel(db, carrossel.id, usuario)
 
 
 @router.post("/carrosseis/{carrossel_id}/regenerar", response_model=CarrosselRead)
-def regenerar_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
-    carrossel = buscar_carrossel(db, carrossel_id)
-    gerar_carrossel_textual(db, carrossel, regenerar=True)
+def regenerar_carrossel(carrossel_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
+    carrossel = buscar_carrossel(db, carrossel_id, usuario)
+    gerar_carrossel_textual(db, carrossel, credentials=credentials_for_user(db, usuario), regenerar=True, usuario=usuario)
     db.commit()
     db.refresh(carrossel)
-    return buscar_carrossel(db, carrossel.id)
+    return buscar_carrossel(db, carrossel.id, usuario)
 
 
 
 @router.post("/carrosseis/{carrossel_id}/assets/gerar", response_model=AssetVisualRead, status_code=status.HTTP_201_CREATED)
-def gerar_asset_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
-    carrossel = buscar_carrossel(db, carrossel_id)
-    asset = gerar_asset_visual(db, carrossel)
+def gerar_asset_carrossel(carrossel_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
+    carrossel = buscar_carrossel(db, carrossel_id, usuario)
+    credentials = credentials_for_user(db, usuario)
+    asset = gerar_asset_visual(db, carrossel, api_key=credentials.openai_api_key, strict_config=True, usuario=usuario)
     db.commit()
     db.refresh(asset)
     return asset
 
 
 @router.get("/carrosseis/{carrossel_id}/assets", response_model=list[AssetVisualRead])
-def listar_assets_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
-    buscar_carrossel(db, carrossel_id)
+def listar_assets_carrossel(carrossel_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
+    buscar_carrossel(db, carrossel_id, usuario)
     return (
         db.query(CarrosselAsset)
         .filter(CarrosselAsset.carrossel_id == carrossel_id)
@@ -183,8 +197,8 @@ def listar_assets_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/assets/{asset_id}", response_model=AssetVisualRead)
-def remover_asset(asset_id: int, db: Session = Depends(get_db)):
-    asset = buscar_asset(db, asset_id)
+def remover_asset(asset_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
+    asset = buscar_asset(db, asset_id, usuario)
     remover_asset_visual(db, asset)
     for slide in db.query(CarrosselSlide).filter(CarrosselSlide.carrossel_id == asset.carrossel_id).all():
         config = slide.layout_config or {}
@@ -200,18 +214,23 @@ def renderizar_carrossel(
     carrossel_id: int,
     payload: RenderizacaoCreate | None = Body(default=None),
     db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_current_user),
 ):
-    carrossel = buscar_carrossel(db, carrossel_id)
+    carrossel = buscar_carrossel(db, carrossel_id, usuario)
     if not carrossel.slides:
         raise HTTPException(status_code=409, detail="Não é possível renderizar sem slides gerados.")
-    if len(carrossel.slides) > 20:
-        raise HTTPException(status_code=409, detail="Não é possível renderizar mais de 20 slides.")
     opcoes = payload or RenderizacaoCreate()
     asset = None
     if opcoes.asset_id:
-        asset = buscar_asset(db, opcoes.asset_id)
+        asset = buscar_asset(db, opcoes.asset_id, usuario)
         if asset.carrossel_id != carrossel.id or asset.status != ASSET_STATUS_ATIVO:
             raise HTTPException(status_code=404, detail="Asset visual não encontrado para este carrossel.")
+        # In OpenAI-only mode, selected asset support is currently ignored.
+        # Keep validation for the provided asset_id, but render with OpenAI anyway.
+        asset = None
+    credentials = credentials_for_user(db, usuario)
+    if not credentials.openai_api_key:
+        raise HTTPException(status_code=409, detail="Configure sua OPENAI_API_KEY na tela de configurações antes de renderizar com IA.")
     renderizar_carrossel_slides(
         db,
         carrossel,
@@ -219,15 +238,18 @@ def renderizar_carrossel(
         brand_name=opcoes.brand_name,
         primary_color=opcoes.primary_color,
         asset=asset,
+        api_key=credentials.openai_api_key,
+        usuario=usuario,
+        aspect_ratio=opcoes.aspect_ratio,
     )
     db.commit()
     db.refresh(carrossel)
-    return buscar_carrossel(db, carrossel.id)
+    return buscar_carrossel(db, carrossel.id, usuario)
 
 
 @router.get("/carrosseis/{carrossel_id}/slides", response_model=list[SlideRead])
-def listar_slides(carrossel_id: int, db: Session = Depends(get_db)):
-    buscar_carrossel(db, carrossel_id)
+def listar_slides(carrossel_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
+    buscar_carrossel(db, carrossel_id, usuario)
     return (
         db.query(CarrosselSlide)
         .filter(CarrosselSlide.carrossel_id == carrossel_id)
@@ -237,8 +259,14 @@ def listar_slides(carrossel_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/slides/{slide_id}", response_model=SlideRead)
-def atualizar_slide(slide_id: int, payload: SlideUpdate, db: Session = Depends(get_db)):
-    slide = db.query(CarrosselSlide).filter(CarrosselSlide.id == slide_id).first()
+def atualizar_slide(slide_id: int, payload: SlideUpdate, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
+    slide = (
+        db.query(CarrosselSlide)
+        .join(Carrossel, CarrosselSlide.carrossel_id == Carrossel.id)
+        .filter(CarrosselSlide.id == slide_id)
+        .filter(Carrossel.usuario_id == usuario.id)
+        .first()
+    )
     if slide is None:
         raise HTTPException(status_code=404, detail="Slide não encontrado.")
     for campo, valor in payload.model_dump(exclude_unset=True).items():
@@ -256,186 +284,12 @@ def atualizar_slide(slide_id: int, payload: SlideUpdate, db: Session = Depends(g
     return slide
 
 
-@router.post("/carrosseis/{carrossel_id}/aprovar", response_model=CarrosselRead)
-def aprovar_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
-    carrossel = buscar_carrossel(db, carrossel_id)
-    if not carrossel.slides:
-        raise HTTPException(status_code=409, detail="Não é possível aprovar sem slides gerados.")
-    carrossel.status = STATUS_APROVADO
-    carrossel.aprovado = True
-    carrossel.aprovado_em = datetime.utcnow()
-    registrar_log(
-        db,
-        carrossel_id=carrossel.id,
-        etapa="aprovacao",
-        status="APROVADO",
-        mensagem="Carrossel aprovado manualmente.",
-    )
-    db.commit()
-    db.refresh(carrossel)
-    return carrossel
-
-
-@router.post("/carrosseis/{carrossel_id}/rejeitar", response_model=CarrosselRead)
-def rejeitar_carrossel(carrossel_id: int, db: Session = Depends(get_db)):
-    carrossel = buscar_carrossel(db, carrossel_id)
-    if carrossel.status == STATUS_PUBLICADO:
-        raise HTTPException(status_code=409, detail="Carrossel publicado não pode ser rejeitado.")
-    carrossel.status = STATUS_REJEITADO
-    carrossel.aprovado = False
-    registrar_log(
-        db,
-        carrossel_id=carrossel.id,
-        etapa="aprovacao",
-        status="REJEITADO",
-        mensagem="Carrossel rejeitado manualmente.",
-    )
-    db.commit()
-    db.refresh(carrossel)
-    return carrossel
-
-
-@router.post("/carrosseis/{carrossel_id}/agendar", response_model=PublicacaoRead)
-def agendar_carrossel(
-    carrossel_id: int,
-    payload: AgendamentoCreate,
-    db: Session = Depends(get_db),
-):
-    carrossel = buscar_carrossel(db, carrossel_id)
-    if carrossel.status != STATUS_APROVADO:
-        raise HTTPException(status_code=409, detail="Apenas carrosséis aprovados podem ser agendados.")
-    publicacao = Publicacao(
-        carrossel_id=carrossel.id,
-        plataforma=payload.plataforma,
-        agendado_para=payload.agendado_para,
-        status=STATUS_AGENDADO,
-    )
-    carrossel.status = STATUS_AGENDADO
-    carrossel.agendado_para = payload.agendado_para
-    db.add(publicacao)
-    db.flush()
-    registrar_log(
-        db,
-        carrossel_id=carrossel.id,
-        etapa="agendamento",
-        status="AGENDADO",
-        mensagem="Publicação agendada.",
-        detalhes={"publicacao_id": publicacao.id, "agendado_para": payload.agendado_para.isoformat()},
-    )
-    db.commit()
-    db.refresh(publicacao)
-    return publicacao
-
-
-@router.put("/publicacoes/{publicacao_id}/reagendar", response_model=PublicacaoRead)
-def reagendar_publicacao(
-    publicacao_id: int,
-    payload: ReagendamentoUpdate,
-    db: Session = Depends(get_db),
-):
-    publicacao = buscar_publicacao(db, publicacao_id)
-    if publicacao.status == STATUS_PUBLICADO:
-        raise HTTPException(status_code=409, detail="Publicações já publicadas não podem ser reagendadas.")
-    if publicacao.status != STATUS_AGENDADO:
-        raise HTTPException(status_code=409, detail="Apenas publicações agendadas podem ser reagendadas.")
-
-    anterior = publicacao.agendado_para
-    publicacao.agendamento_anterior = anterior
-    publicacao.agendado_para = payload.agendado_para
-    publicacao.reagendado = True
-    publicacao.reagendado_em = datetime.utcnow()
-    if payload.plataforma:
-        publicacao.plataforma = payload.plataforma
-
-    publicacao.carrossel.agendado_para = payload.agendado_para
-    registrar_log(
-        db,
-        carrossel_id=publicacao.carrossel_id,
-        etapa="reagendamento",
-        status="REAGENDADO",
-        mensagem="Publicação reagendada.",
-        detalhes={
-            "publicacao_id": publicacao.id,
-            "agendamento_anterior": anterior.isoformat(),
-            "novo_agendamento": payload.agendado_para.isoformat(),
-        },
-    )
-    db.commit()
-    db.refresh(publicacao)
-    return publicacao
-
-
-@router.post("/publicacoes/{publicacao_id}/cancelar", response_model=PublicacaoRead)
-def cancelar_publicacao(publicacao_id: int, db: Session = Depends(get_db)):
-    publicacao = buscar_publicacao(db, publicacao_id)
-    if publicacao.status == STATUS_PUBLICADO:
-        raise HTTPException(status_code=409, detail="Publicações já publicadas não podem ser canceladas.")
-    publicacao.status = STATUS_CANCELADO
-    publicacao.carrossel.status = STATUS_CANCELADO
-    registrar_log(
-        db,
-        carrossel_id=publicacao.carrossel_id,
-        etapa="cancelamento",
-        status="CANCELADO",
-        mensagem="Publicação cancelada.",
-        detalhes={"publicacao_id": publicacao.id},
-    )
-    db.commit()
-    db.refresh(publicacao)
-    return publicacao
-
-
-@router.post("/carrosseis/{carrossel_id}/publicar-agora", response_model=PublicacaoRead)
-def publicar_agora(carrossel_id: int, db: Session = Depends(get_db)):
-    carrossel = buscar_carrossel(db, carrossel_id)
-    if carrossel.status == STATUS_PUBLICADO:
-        raise HTTPException(status_code=409, detail="Carrossel já publicado.")
-    if carrossel.status not in {STATUS_APROVADO, STATUS_AGENDADO}:
-        raise HTTPException(status_code=409, detail="Apenas carrosséis aprovados ou agendados podem ser publicados.")
-
-    publicacao = (
-        db.query(Publicacao)
-        .filter(Publicacao.carrossel_id == carrossel.id)
-        .filter(Publicacao.status == STATUS_AGENDADO)
-        .order_by(Publicacao.agendado_para.asc())
-        .first()
-    )
-    if publicacao is None:
-        publicacao = Publicacao(
-            carrossel_id=carrossel.id,
-            plataforma="instagram",
-            agendado_para=datetime.utcnow(),
-            status=STATUS_AGENDADO,
-        )
-        db.add(publicacao)
-        db.flush()
-
-    publicar_mockado(db, publicacao)
-    db.commit()
-    db.refresh(publicacao)
-    return publicacao
-
-
-@router.get("/publicacoes", response_model=list[PublicacaoRead])
-def listar_publicacoes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return (
-        db.query(Publicacao)
-        .order_by(Publicacao.agendado_para.desc())
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
-
-
-@router.get("/publicacoes/{publicacao_id}", response_model=PublicacaoRead)
-def obter_publicacao(publicacao_id: int, db: Session = Depends(get_db)):
-    return buscar_publicacao(db, publicacao_id)
-
-
 @router.get("/logs", response_model=list[LogExecucaoRead])
-def listar_logs(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def listar_logs(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
     return (
         db.query(LogExecucao)
+        .outerjoin(Carrossel, LogExecucao.carrossel_id == Carrossel.id)
+        .filter(or_(Carrossel.usuario_id == usuario.id, LogExecucao.carrossel_id.is_(None) if usuario.is_admin else False))
         .order_by(LogExecucao.created_at.desc())
         .offset(skip)
         .limit(limit)

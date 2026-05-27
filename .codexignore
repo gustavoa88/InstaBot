@@ -1,0 +1,17 @@
+venv/
+storage/
+node_modules/
+logs/
+frontend/node_modules/
+dist/
+build/
+alembic/
+__pycache__/
+.pytest_cache/
+*.zip
+*.xlsx
+*.sqlite3
+*.parquet
+*.log
+*.db
+*.csv

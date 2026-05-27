@@ -1,11 +1,9 @@
-from datetime import datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
-from app.config import MEDIA_RETENTION_DAYS, STORAGE_PATH
-from app.models.carrossel import ASSET_STATUS_REMOVIDO, Carrossel, CarrosselAsset, CarrosselSlide, STATUS_CANCELADO, STATUS_PUBLICADO, STATUS_REJEITADO
+from app.config import STORAGE_PATH
+from app.models.carrossel import ASSET_STATUS_REMOVIDO, CarrosselAsset, CarrosselSlide
 from app.services.log_service import registrar_log
 
 
@@ -22,19 +20,7 @@ def _resolver_storage_path(imagem_path: str | None, storage_root: Path) -> Path 
 
 
 def limpar_midias_expiradas(db: Session) -> int:
-    limite = datetime.utcnow() - timedelta(days=MEDIA_RETENTION_DAYS)
-    slides_expirados = (
-        db.query(CarrosselSlide)
-        .join(Carrossel)
-        .filter(
-            or_(
-                Carrossel.status == STATUS_REJEITADO,
-                Carrossel.status == STATUS_CANCELADO,
-                and_(Carrossel.status == STATUS_PUBLICADO, Carrossel.publicado_em <= limite),
-            )
-        )
-        .all()
-    )
+    slides_expirados = []
 
     removidos = 0
     storage_root = Path(STORAGE_PATH).resolve()

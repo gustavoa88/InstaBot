@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -10,7 +10,7 @@ class CarrosselCreate(BaseModel):
     tema: str | None = Field(default=None, max_length=100)
     tom: str | None = Field(default=None, max_length=100)
     publico_alvo: str | None = Field(default=None, max_length=150)
-    quantidade_slides: int = Field(default=7, ge=1, le=20)
+    quantidade_slides: int = Field(default=7, ge=1, le=7)
     observacoes_adicionais: str | None = Field(default=None, max_length=1000)
 
 
@@ -20,7 +20,7 @@ class CarrosselUpdate(BaseModel):
     tema: str | None = Field(default=None, max_length=100)
     tom: str | None = Field(default=None, max_length=100)
     publico_alvo: str | None = Field(default=None, max_length=150)
-    quantidade_slides: int | None = Field(default=None, ge=1, le=20)
+    quantidade_slides: int | None = Field(default=None, ge=1, le=7)
     legenda: str | None = Field(default=None, max_length=5000)
     hashtags: list[str] | None = Field(default=None, max_length=30)
     prompt_config: dict[str, Any] | None = None
@@ -34,7 +34,6 @@ class SlideUpdate(BaseModel):
     imagem_path: str | None = Field(default=None, max_length=1000)
     imagem_url: str | None = Field(default=None, max_length=1000)
     layout_config: dict[str, Any] | None = None
-    aprovado: bool | None = None
 
 
 class RenderizacaoCreate(BaseModel):
@@ -42,16 +41,7 @@ class RenderizacaoCreate(BaseModel):
     brand_name: str | None = Field(default=None, max_length=80)
     primary_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     asset_id: int | None = Field(default=None, ge=1)
-
-
-class AgendamentoCreate(BaseModel):
-    agendado_para: datetime
-    plataforma: str = Field(default="instagram", max_length=50)
-
-
-class ReagendamentoUpdate(BaseModel):
-    agendado_para: datetime
-    plataforma: str | None = Field(default=None, max_length=50)
+    aspect_ratio: Literal["1:1", "1.91:1", "4:5"] = "4:5"
 
 
 class SlideRead(BaseModel):
@@ -67,7 +57,6 @@ class SlideRead(BaseModel):
     imagem_path: str | None = None
     imagem_url: str | None = None
     layout_config: dict[str, Any] | None = None
-    aprovado: bool
     created_at: datetime
     updated_at: datetime
 
@@ -85,25 +74,6 @@ class AssetVisualRead(BaseModel):
     asset_url: str | None = None
     modelo: str | None = None
     provider_response: dict[str, Any] | None = None
-    created_at: datetime
-    updated_at: datetime
-
-
-class PublicacaoRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    carrossel_id: int
-    plataforma: str
-    status: str
-    agendado_para: datetime
-    publicado_em: datetime | None = None
-    external_post_id: str | None = None
-    resposta_api: dict[str, Any] | None = None
-    erro: str | None = None
-    reagendado: bool
-    reagendado_em: datetime | None = None
-    agendamento_anterior: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -135,13 +105,43 @@ class CarrosselRead(BaseModel):
     hashtags: list[str] | None = None
     prompt_config: dict[str, Any] | None = None
     ia_resultado: dict[str, Any] | None = None
-    aprovado: bool
-    aprovado_em: datetime | None = None
-    agendado_para: datetime | None = None
-    publicado_em: datetime | None = None
-    erro_publicacao: str | None = None
     created_at: datetime
     updated_at: datetime
     slides: list[SlideRead] = Field(default_factory=list)
-    publicacoes: list[PublicacaoRead] = Field(default_factory=list)
     assets: list[AssetVisualRead] = Field(default_factory=list)
+
+
+class UsuarioRegister(BaseModel):
+    nome: str = Field(min_length=1, max_length=150)
+    email: str = Field(min_length=5, max_length=255)
+    password: str = Field(min_length=8, max_length=200)
+
+
+class UsuarioLogin(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class UsuarioRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: str
+    nome: str
+    is_admin: bool
+    created_at: datetime
+
+
+class TokenRead(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    usuario: UsuarioRead
+
+
+class ConfiguracaoUpdate(BaseModel):
+    openai_api_key: str | None = Field(default=None, max_length=500)
+
+
+class ConfiguracaoRead(BaseModel):
+    openai_configurado: bool
+    openai_api_key_masked: str | None = None

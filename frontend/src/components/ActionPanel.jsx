@@ -1,9 +1,5 @@
-import { CalendarClock, CheckCircle2, Image, ImagePlus, Play, RefreshCw, Send, Trash2, XCircle } from 'lucide-react';
-
-function toDatetimeLocalValue(date = new Date()) {
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 16);
-}
+import { Download, Image, ImagePlus, Play, RefreshCw, Trash2 } from 'lucide-react';
+import { api } from '../services/api.js';
 
 function resolveMediaUrl(url) {
   if (!url) return '';
@@ -17,25 +13,21 @@ const TEMPLATE_OPTIONS = [
   { value: 'soft_brand', label: 'Soft brand' },
 ];
 
+const ASPECT_RATIO_OPTIONS = [
+  { value: '1:1', label: 'Quadrado 1:1' },
+  { value: '1.91:1', label: 'Horizontal 1,91:1' },
+  { value: '4:5', label: 'Vertical 4:5' },
+];
+
 export function ActionPanel({
   selected,
-  scheduleForm,
-  rescheduleForms,
   renderForm,
-  onScheduleForm,
-  onRescheduleForm,
   onRenderForm,
   onGenerate,
   onRegenerate,
   onRenderSlides,
   onGenerateAsset,
   onDeleteAsset,
-  onApprove,
-  onReject,
-  onSchedule,
-  onReschedule,
-  onCancelPublication,
-  onPublishNow,
   loading,
 }) {
   if (!selected) {
@@ -47,18 +39,33 @@ export function ActionPanel({
     );
   }
 
-  const activeAsset = [...(selected.assets || [])].filter((asset) => asset.status === 'ATIVO').sort((a, b) => b.id - a.id)[0];
+  const activeAsset = [...(selected.assets || [])].filter((asset) => asset.status === 'ATIVO' && asset.tipo === 'background').sort((a, b) => b.id - a.id)[0];
   const canGenerate = !selected.slides?.length;
   const canRender = Boolean(selected.slides?.length);
-  const canApprove = selected.slides?.length && selected.status !== 'PUBLICADO';
-  const canSchedule = selected.status === 'APROVADO';
-  const canPublish = ['APROVADO', 'AGENDADO'].includes(selected.status);
+  const canDownload = Boolean(selected.slides?.some((slide) => slide.imagem_url));
   const normalizedColor = /^#[0-9A-Fa-f]{6}$/.test(renderForm.primary_color) ? renderForm.primary_color : '#6f9684';
+
+  const downloadSlides = async () => {
+    try {
+      const response = await api.downloadCarousel(selected.id);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'carousel_' + selected.id + '.zip';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      window.alert(error?.message || 'Não foi possível baixar os slides.');
+    }
+  };
 
   return (
     <aside className="panel rounded-md p-4">
       <h2 className="text-sm font-semibold text-ink">Fluxo do carrossel</h2>
-      <p className="mt-1 text-xs leading-5 text-ink/55">Siga as etapas em ordem: gere a estrutura, revise, renderize e publique.</p>
+      <p className="mt-1 text-xs leading-5 text-ink/55">Siga as etapas em ordem: gere a estrutura, revise e renderize os slides.</p>
 
       <section className="mt-4 rounded-md border border-line bg-white p-3">
         <h3 className="text-sm font-semibold text-ink">1. Gerar estrutura</h3>
@@ -113,6 +120,18 @@ export function ActionPanel({
             </select>
           </label>
           <label className="mt-3 block">
+            <span className="field-label">Proporção dos slides</span>
+            <select
+              className="input mt-1"
+              value={renderForm.aspect_ratio || '4:5'}
+              onChange={(event) => onRenderForm({ ...renderForm, aspect_ratio: event.target.value })}
+            >
+              {ASPECT_RATIO_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="mt-3 block">
             <span className="field-label">Marca/assinatura</span>
             <input
               className="input mt-1"
@@ -152,73 +171,12 @@ export function ActionPanel({
             <Image className="h-4 w-4" />
             Renderizar slides
           </button>
-        </div>
-      </section>
-
-      <section className="mt-4 rounded-md border border-line bg-white p-3">
-        <h3 className="text-sm font-semibold text-ink">3. Revisão</h3>
-        <p className="mt-1 text-xs text-ink/55">Aprove somente depois de revisar textos e previews renderizados.</p>
-        <div className="mt-3 grid gap-2">
-          <button className="primary-button justify-start" onClick={onApprove} disabled={loading || !canApprove}>
-            <CheckCircle2 className="h-4 w-4" />
-            Aprovar
-          </button>
-          <button className="danger-button justify-start" onClick={onReject} disabled={loading || !canRender || selected.status === 'PUBLICADO'}>
-            <XCircle className="h-4 w-4" />
-            Rejeitar
-          </button>
-        </div>
-      </section>
-
-      <section className="mt-4 rounded-md border border-line bg-white p-3">
-        <h3 className="text-sm font-semibold text-ink">4. Publicação</h3>
-        <p className="mt-1 text-xs text-ink/55">Após aprovar, agende a publicação ou faça um teste imediato.</p>
-        <label className="mt-3 block">
-          <span className="field-label">Data e hora</span>
-          <input className="input mt-1" type="datetime-local" value={scheduleForm.agendado_para || toDatetimeLocalValue(new Date(Date.now() + 3600000))} onChange={(event) => onScheduleForm({ ...scheduleForm, agendado_para: event.target.value })} />
-        </label>
-        <label className="mt-3 block">
-          <span className="field-label">Plataforma</span>
-          <input className="input mt-1" value={scheduleForm.plataforma} onChange={(event) => onScheduleForm({ ...scheduleForm, plataforma: event.target.value })} />
-        </label>
-        <div className="mt-3 grid gap-2">
-          <button className="primary-button justify-start" onClick={onSchedule} disabled={loading || !canSchedule}>
-            <CalendarClock className="h-4 w-4" />
-            Agendar
-          </button>
-          <button className="secondary-button justify-start" onClick={onPublishNow} disabled={loading || !canPublish}>
-            <Send className="h-4 w-4" />
-            Publicar teste
-          </button>
-        </div>
-      </section>
-
-      <section className="mt-5 border-t border-line pt-4">
-        <h3 className="text-sm font-semibold text-ink">Publicações</h3>
-        <div className="mt-3 grid gap-3">
-          {(selected.publicacoes || []).map((publicacao) => {
-            const form = rescheduleForms[publicacao.id] || {
-              agendado_para: toDatetimeLocalValue(new Date(publicacao.agendado_para)),
-              plataforma: publicacao.plataforma,
-            };
-            return (
-              <div key={publicacao.id} className="rounded-md border border-line bg-white p-3">
-                <div className="flex items-center justify-between gap-2 text-xs text-ink/60">
-                  <span>#{publicacao.id} · {publicacao.status}</span>
-                  <span>{publicacao.plataforma}</span>
-                </div>
-                <label className="mt-3 block">
-                  <span className="field-label">Novo horário</span>
-                  <input className="input mt-1" type="datetime-local" value={form.agendado_para} onChange={(event) => onRescheduleForm(publicacao.id, { ...form, agendado_para: event.target.value })} disabled={publicacao.status !== 'AGENDADO'} />
-                </label>
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <button className="secondary-button" onClick={() => onReschedule(publicacao.id)} disabled={loading || publicacao.status !== 'AGENDADO'}>Reagendar</button>
-                  <button className="danger-button" onClick={() => onCancelPublication(publicacao.id)} disabled={loading || publicacao.status === 'PUBLICADO'}>Cancelar</button>
-                </div>
-              </div>
-            );
-          })}
-          {!selected.publicacoes?.length && <p className="text-sm text-ink/55">Nenhuma publicação criada.</p>}
+          {canDownload && (
+            <button className="secondary-button mt-2 w-full justify-start" onClick={downloadSlides} disabled={loading}>
+              <Download className="h-4 w-4" />
+              Download slides
+            </button>
+          )}
         </div>
       </section>
     </aside>

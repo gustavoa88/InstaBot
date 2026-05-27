@@ -10,3 +10,6 @@ celery
 openai
 Pillow
 pytest
+passlib[bcrypt]
+cryptography
+bcrypt<5

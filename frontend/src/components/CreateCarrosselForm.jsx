@@ -2,6 +2,7 @@ import { Plus } from 'lucide-react';
 
 export function CreateCarrosselForm({ form, onChange, onSubmit, loading }) {
   const update = (field, value) => onChange({ ...form, [field]: value });
+  const slideOptions = Array.from({ length: 7 }, (_, index) => index + 1);
 
   return (
     <form onSubmit={onSubmit} className="panel rounded-md p-4">
@@ -22,7 +23,11 @@ export function CreateCarrosselForm({ form, onChange, onSubmit, loading }) {
       <div className="mt-3 grid gap-3 sm:grid-cols-3">
         <label>
           <span className="field-label">Slides</span>
-          <input className="input mt-1" type="number" min="1" max="20" value={form.quantidade_slides} onChange={(event) => update('quantidade_slides', event.target.value)} />
+          <select className="input mt-1" value={form.quantidade_slides} onChange={(event) => update('quantidade_slides', Number(event.target.value))}>
+            {slideOptions.map((value) => (
+              <option key={value} value={value}>{value}</option>
+            ))}
+          </select>
         </label>
         <label>
           <span className="field-label">Tom</span>

@@ -18,6 +18,7 @@ export function Workspace({ selected, draft, slideDrafts, onDraftChange, onSlide
   }
 
   const updateDraft = (field, value) => onDraftChange({ ...draft, [field]: value });
+  const slideOptions = Array.from({ length: 7 }, (_, index) => index + 1);
 
   return (
     <main className="flex min-h-0 flex-col gap-4 overflow-y-auto">
@@ -61,11 +62,15 @@ export function Workspace({ selected, draft, slideDrafts, onDraftChange, onSlide
           </label>
           <label>
             <span className="field-label">Quantidade de slides</span>
-            <input className="input mt-1" type="number" min="1" max="20" value={draft.quantidade_slides || 1} onChange={(event) => updateDraft('quantidade_slides', event.target.value)} />
+            <select className="input mt-1" value={draft.quantidade_slides || 1} onChange={(event) => updateDraft('quantidade_slides', Number(event.target.value))}>
+              {slideOptions.map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
           </label>
           <label>
             <span className="field-label">Hashtags</span>
-            <input className="input mt-1" value={draft.hashtagsText ?? hashtagsToText(draft.hashtags)} onChange={(event) => updateDraft('hashtagsText', event.target.value)} placeholder="#conteudo #instagram" />
+            <input className="input mt-1" value={draft.hashtagsText ?? hashtagsToText(draft.hashtags)} onChange={(event) => updateDraft('hashtagsText', event.target.value)} placeholder="#conteudo #carrossel" />
           </label>
         </div>
         <div className="mt-3 grid gap-3 lg:grid-cols-2">
@@ -92,14 +97,14 @@ export function Workspace({ selected, draft, slideDrafts, onDraftChange, onSlide
             Alterações de texto só aparecem no preview depois de salvar e renderizar novamente.
           </p>
         )}
-        <div className="grid gap-3 xl:grid-cols-2">
+        <div className="grid auto-cols-[minmax(360px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-4 scroll-smooth snap-x snap-mandatory">
           {(selected.slides || []).map((slide) => {
             const draftSlide = slideDrafts[slide.id] || slide;
             const updateSlide = (field, value) => onSlideDraftChange(slide.id, { ...draftSlide, [field]: value });
             const renderMeta = slide.layout_config || {};
             const hasUnsavedTextChanges = Boolean(slide.imagem_url) && ['titulo', 'texto_principal', 'texto_secundario', 'observacao_visual'].some((field) => (draftSlide[field] || '') !== (slide[field] || ''));
             return (
-              <article key={slide.id} className="rounded-md border border-line bg-white p-3">
+              <article key={slide.id} className="min-w-[360px] snap-start rounded-md border border-line bg-white p-3">
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-md bg-steel/10 px-2 text-xs font-semibold text-steel">{slide.numero_slide}</span>
                   <button className="secondary-button py-1.5" onClick={() => onSaveSlide(slide.id)} disabled={loading}>

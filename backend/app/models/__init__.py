@@ -1,3 +1,3 @@
-from app.models.carrossel import Carrossel, CarrosselAsset, CarrosselSlide, LogExecucao, Publicacao
+from app.models.carrossel import Carrossel, CarrosselAsset, CarrosselSlide, LogExecucao
 
-__all__ = ["Carrossel", "CarrosselAsset", "CarrosselSlide", "LogExecucao", "Publicacao"]
+__all__ = ["Carrossel", "CarrosselAsset", "CarrosselSlide", "LogExecucao"]

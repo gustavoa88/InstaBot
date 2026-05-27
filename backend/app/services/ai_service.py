@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 from typing import Any
 
@@ -7,7 +8,7 @@ from openai import OpenAI
 from sqlalchemy.orm import Session
 
 from app.config import (
-    OPENAI_API_KEY,
+    OPENAI_ADMIN_DAILY_REQUEST_LIMIT,
     OPENAI_CARROSSEL_REQUEST_LIMIT,
     OPENAI_DAILY_REQUEST_LIMIT,
     OPENAI_MAX_OUTPUT_TOKENS,
@@ -19,10 +20,13 @@ from app.models.carrossel import (
     Carrossel,
     CarrosselSlide,
     LogExecucao,
+    Usuario,
     STATUS_AGUARDANDO_APROVACAO,
     STATUS_GERANDO,
 )
 from app.services.log_service import registrar_log
+
+OPENAI_API_KEY = ""
 
 
 CARROSSEL_RESPONSE_SCHEMA: dict[str, Any] = {
@@ -76,8 +80,8 @@ PROMPT_FIELD_LIMITS = {
 }
 
 
-def openai_configurado() -> bool:
-    return bool(OPENAI_API_KEY.strip())
+def openai_configurado(api_key: str | None = None) -> bool:
+    return bool((api_key if api_key is not None else OPENAI_API_KEY).strip())
 
 
 def _limitar_texto(valor: str | None, limite: int) -> str:
@@ -118,7 +122,7 @@ def _prompt_usuario(carrossel: Carrossel) -> str:
     observacoes = _limitar_texto(observacoes, PROMPT_FIELD_LIMITS["observacoes_adicionais"]) or "nenhuma"
 
     return f"""
-Crie um roteiro de carrossel para Instagram com {carrossel.quantidade_slides or 7} slides.
+Crie um roteiro de carrossel para redes sociais com {carrossel.quantidade_slides or 7} slides.
 
 Dados da ideia:
 - Título atual: {titulo}
@@ -142,19 +146,35 @@ Regras:
 """.strip()
 
 
-def _limites_configurados() -> dict[str, int]:
+def _usuario_is_admin(usuario: Usuario | None, carrossel: Carrossel | None = None) -> bool:
+    if usuario is not None:
+        return bool(getattr(usuario, "is_admin", False))
+    dono = getattr(carrossel, "usuario", None) if carrossel is not None else None
+    return bool(getattr(dono, "is_admin", False))
+
+
+def _limites_configurados(*, usuario: Usuario | None = None, carrossel: Carrossel | None = None) -> dict[str, int]:
+    daily_limit = OPENAI_ADMIN_DAILY_REQUEST_LIMIT if _usuario_is_admin(usuario, carrossel) else OPENAI_DAILY_REQUEST_LIMIT
     return {
-        "daily_request_limit": OPENAI_DAILY_REQUEST_LIMIT,
+        "daily_request_limit": daily_limit,
         "carrossel_request_limit": OPENAI_CARROSSEL_REQUEST_LIMIT,
         "max_output_tokens": OPENAI_MAX_OUTPUT_TOKENS,
     }
 
 
-def _contar_chamadas_openai(db: Session, *, carrossel_id: int | None = None, desde: datetime | None = None) -> int:
+def _contar_chamadas_openai(
+    db: Session,
+    *,
+    carrossel_id: int | None = None,
+    usuario_id: int | None = None,
+    desde: datetime | None = None,
+) -> int:
     query = db.query(LogExecucao).filter(
         LogExecucao.etapa == "geracao_ia",
         LogExecucao.status == OPENAI_CALL_STARTED,
     )
+    if usuario_id is not None:
+        query = query.join(Carrossel, LogExecucao.carrossel_id == Carrossel.id).filter(Carrossel.usuario_id == usuario_id)
     if carrossel_id is not None:
         query = query.filter(LogExecucao.carrossel_id == carrossel_id)
     if desde is not None:
@@ -169,13 +189,17 @@ def _bloquear_por_limite(
     escopo: str,
     limite: int,
     chamadas: int,
+    usuario: Usuario | None = None,
+    carrossel: Carrossel | None = None,
 ) -> None:
     detalhes = {
         "escopo": escopo,
         "limite": limite,
         "chamadas_registradas": chamadas,
         "modelo": OPENAI_MODEL,
-        "limites": _limites_configurados(),
+        "limites": _limites_configurados(usuario=usuario, carrossel=carrossel),
+        "usuario_id": getattr(usuario, "id", None),
+        "admin": _usuario_is_admin(usuario, carrossel),
     }
     registrar_log(
         db,
@@ -192,28 +216,36 @@ def _bloquear_por_limite(
     )
 
 
-def _verificar_limites(db: Session, carrossel: Carrossel) -> None:
-    if OPENAI_DAILY_REQUEST_LIMIT > 0:
+def _verificar_limites(db: Session, carrossel: Carrossel, *, usuario: Usuario | None = None) -> None:
+    limites = _limites_configurados(usuario=usuario, carrossel=carrossel)
+    usuario_id = getattr(usuario, "id", None) or getattr(carrossel, "usuario_id", None)
+    daily_limit = limites["daily_request_limit"]
+    if daily_limit > 0:
         inicio_dia = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-        chamadas_dia = _contar_chamadas_openai(db, desde=inicio_dia)
-        if chamadas_dia >= OPENAI_DAILY_REQUEST_LIMIT:
+        chamadas_dia = _contar_chamadas_openai(db, usuario_id=usuario_id, desde=inicio_dia)
+        if chamadas_dia >= daily_limit:
             _bloquear_por_limite(
                 db,
                 carrossel_id=carrossel.id,
                 escopo="diário",
-                limite=OPENAI_DAILY_REQUEST_LIMIT,
+                limite=daily_limit,
                 chamadas=chamadas_dia,
+                usuario=usuario,
+                carrossel=carrossel,
             )
 
-    if OPENAI_CARROSSEL_REQUEST_LIMIT > 0:
+    carrossel_limit = limites["carrossel_request_limit"]
+    if carrossel_limit > 0:
         chamadas_carrossel = _contar_chamadas_openai(db, carrossel_id=carrossel.id)
-        if chamadas_carrossel >= OPENAI_CARROSSEL_REQUEST_LIMIT:
+        if chamadas_carrossel >= carrossel_limit:
             _bloquear_por_limite(
                 db,
                 carrossel_id=carrossel.id,
                 escopo="por carrossel",
-                limite=OPENAI_CARROSSEL_REQUEST_LIMIT,
+                limite=carrossel_limit,
                 chamadas=chamadas_carrossel,
+                usuario=usuario,
+                carrossel=carrossel,
             )
 
 
@@ -236,6 +268,56 @@ def _usage_to_dict(response: Any) -> dict[str, int | None]:
         "output_tokens": usage_data.get("output_tokens"),
         "total_tokens": usage_data.get("total_tokens"),
     }
+
+
+def _redact_secret(value: str) -> str:
+    return re.sub(r"sk-[A-Za-z0-9_\-]+", "sk-***", value)
+
+
+def _openai_status_code(exc: Exception) -> int | None:
+    status = getattr(exc, "status_code", None)
+    if status is not None:
+        return int(status)
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    return int(status) if status is not None else None
+
+
+def _openai_raw_error(exc: Exception) -> str:
+    body = getattr(exc, "body", None)
+    if body:
+        return _redact_secret(str(body))
+    response = getattr(exc, "response", None)
+    text = getattr(response, "text", None)
+    if text:
+        return _redact_secret(str(text))
+    return _redact_secret(str(exc))
+
+
+def _openai_generation_error_message(exc: Exception) -> str:
+    status_code = _openai_status_code(exc)
+    raw_error = _openai_raw_error(exc)
+    if status_code == 401:
+        return f"Chave OpenAI inválida ou expirada. Atualize OPENAI_API_KEY. Detalhe OpenAI: {raw_error}"
+    if status_code == 429:
+        return f"Limite de geração textual da OpenAI atingido. Detalhe OpenAI: {raw_error}"
+    if status_code is not None:
+        return f"Falha na OpenAI ao gerar slides (status {status_code}). Detalhe OpenAI: {raw_error}"
+    return f"Falha na OpenAI ao gerar slides. Detalhe OpenAI: {raw_error}"
+
+
+def _raise_openai_generation_error(db: Session, carrossel: Carrossel, exc: Exception) -> None:
+    status_code = _openai_status_code(exc) or 502
+    message = _openai_generation_error_message(exc)
+    registrar_log(
+        db,
+        carrossel_id=carrossel.id,
+        etapa="geracao_ia",
+        status="ERRO_OPENAI",
+        mensagem=message,
+        detalhes={"status_code": status_code, "modelo": OPENAI_MODEL},
+    )
+    raise HTTPException(status_code=status_code, detail=message)
 
 
 def _response_output_text(response: Any) -> str:
@@ -270,8 +352,8 @@ def _validar_slides_openai(slides: Any, quantidade_esperada: int) -> list[dict[s
     return sorted(slides, key=lambda item: item["numero_slide"])
 
 
-def gerar_carrossel_com_openai(db: Session, carrossel: Carrossel, *, regenerar: bool = False) -> Carrossel:
-    _verificar_limites(db, carrossel)
+def gerar_carrossel_com_openai(db: Session, carrossel: Carrossel, *, api_key: str | None = None, regenerar: bool = False, usuario: Usuario | None = None) -> Carrossel:
+    _verificar_limites(db, carrossel, usuario=usuario)
 
     carrossel.status = STATUS_GERANDO
     request_config = {
@@ -280,7 +362,7 @@ def gerar_carrossel_com_openai(db: Session, carrossel: Carrossel, *, regenerar: 
         "max_output_tokens": OPENAI_MAX_OUTPUT_TOKENS,
         "verbosity": OPENAI_VERBOSITY,
         "reasoning_effort": OPENAI_REASONING_EFFORT,
-        "limites": _limites_configurados(),
+        "limites": _limites_configurados(usuario=usuario, carrossel=carrossel),
     }
     registrar_log(
         db,
@@ -295,27 +377,30 @@ def gerar_carrossel_com_openai(db: Session, carrossel: Carrossel, *, regenerar: 
         _limpar_slides(db, carrossel)
 
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        response = client.responses.create(
-            model=OPENAI_MODEL,
-            instructions=(
-                "Você é um estrategista de conteúdo para Instagram. "
-                "Gere roteiros de carrossel claros, revisáveis e prontos para aprovação humana. "
-                "Use linguagem natural, objetiva e adequada ao público informado."
-            ),
-            input=_prompt_usuario(carrossel),
-            max_output_tokens=OPENAI_MAX_OUTPUT_TOKENS,
-            reasoning={"effort": OPENAI_REASONING_EFFORT},
-            text={
-                "verbosity": OPENAI_VERBOSITY,
-                "format": {
-                    "type": "json_schema",
-                    "name": "carrossel_textual",
-                    "strict": True,
-                    "schema": CARROSSEL_RESPONSE_SCHEMA,
+        client = OpenAI(api_key=api_key if api_key is not None else OPENAI_API_KEY)
+        try:
+            response = client.responses.create(
+                model=OPENAI_MODEL,
+                instructions=(
+                    "Você é um estrategista de conteúdo para Instagram. "
+                    "Gere roteiros de carrossel claros, revisaveis e prontos para edicao humana. "
+                    "Use linguagem natural, objetiva e adequada ao público informado."
+                ),
+                input=_prompt_usuario(carrossel),
+                max_output_tokens=OPENAI_MAX_OUTPUT_TOKENS,
+                reasoning={"effort": OPENAI_REASONING_EFFORT},
+                text={
+                    "verbosity": OPENAI_VERBOSITY,
+                    "format": {
+                        "type": "json_schema",
+                        "name": "carrossel_textual",
+                        "strict": True,
+                        "schema": CARROSSEL_RESPONSE_SCHEMA,
+                    },
                 },
-            },
-        )
+            )
+        except Exception as exc:
+            _raise_openai_generation_error(db, carrossel, exc)
 
         resultado = _carregar_resultado_response(response)
         quantidade_esperada = carrossel.quantidade_slides or 7
@@ -363,7 +448,7 @@ def gerar_carrossel_com_openai(db: Session, carrossel: Carrossel, *, regenerar: 
                 "slides_criados": len(slides),
                 "response_id": getattr(response, "id", None),
                 "usage": usage,
-                "limites": _limites_configurados(),
+                "limites": _limites_configurados(usuario=usuario, carrossel=carrossel),
             },
         )
         return carrossel
@@ -377,7 +462,7 @@ def gerar_carrossel_com_openai(db: Session, carrossel: Carrossel, *, regenerar: 
             detalhes={
                 "modelo": OPENAI_MODEL,
                 "erro": str(exc),
-                "limites": _limites_configurados(),
+                "limites": _limites_configurados(usuario=usuario, carrossel=carrossel),
             },
         )
         raise

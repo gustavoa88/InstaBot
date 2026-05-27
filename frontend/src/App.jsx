@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, KeyRound, Loader2 } from 'lucide-react';
+import { AlertTriangle, Loader2, LogOut, Settings } from 'lucide-react';
 import { ActionPanel } from './components/ActionPanel.jsx';
+import { AuthScreen } from './components/AuthScreen.jsx';
 import { CarrosselList } from './components/CarrosselList.jsx';
 import { CreateCarrosselForm } from './components/CreateCarrosselForm.jsx';
 import { LogsPanel } from './components/LogsPanel.jsx';
+import { SettingsPanel } from './components/SettingsPanel.jsx';
 import { Workspace } from './components/Workspace.jsx';
 import { api } from './services/api.js';
 
@@ -19,16 +21,8 @@ const DEFAULT_RENDER_FORM = {
   brand_name: '',
   primary_color: '#6f9684',
   use_asset: true,
+  aspect_ratio: '4:5',
 };
-
-function toIsoFromLocal(value) {
-  return new Date(value).toISOString();
-}
-
-function toLocalDateInput(date = new Date(Date.now() + 3600000)) {
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 16);
-}
 
 function normalizeCarrosselPayload(draft) {
   const hashtagsText = draft.hashtagsText ?? (Array.isArray(draft.hashtags) ? draft.hashtags.join(' ') : '');
@@ -60,15 +54,18 @@ export default function App() {
   const [createForm, setCreateForm] = useState(EMPTY_FORM);
   const [draft, setDraft] = useState({});
   const [slideDrafts, setSlideDrafts] = useState({});
-  const [scheduleForm, setScheduleForm] = useState({ agendado_para: toLocalDateInput(), plataforma: 'instagram' });
   const [renderForm, setRenderForm] = useState(DEFAULT_RENDER_FORM);
-  const [rescheduleForms, setRescheduleForms] = useState({});
   const [statusFilter, setStatusFilter] = useState('TODOS');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [adminTokenInput, setAdminTokenInput] = useState(() => api.getAdminToken());
+  const [user, setUser] = useState(null);
+  const [checkingAuth, setCheckingAuth] = useState(Boolean(api.getAuthToken()));
+  const [authError, setAuthError] = useState('');
+  const [config, setConfig] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsForm, setSettingsForm] = useState({});
 
   const selected = useMemo(
     () => carrosseis.find((item) => item.id === selectedId) || null,
@@ -109,7 +106,22 @@ export default function App() {
   };
 
   useEffect(() => {
-    run(() => loadData(null)).catch(() => {});
+    if (!api.getAuthToken()) {
+      setCheckingAuth(false);
+      return;
+    }
+    api.me()
+      .then(async (currentUser) => {
+        setUser(currentUser);
+        const currentConfig = await api.getConfiguracoes();
+        setConfig(currentConfig);
+        await loadData(null);
+      })
+      .catch(() => {
+        api.logout();
+        setUser(null);
+      })
+      .finally(() => setCheckingAuth(false));
   }, []);
 
   useEffect(() => {
@@ -120,27 +132,47 @@ export default function App() {
     }
     setDraft({ ...selected, hashtagsText: Array.isArray(selected.hashtags) ? selected.hashtags.join(' ') : '' });
     setSlideDrafts(Object.fromEntries((selected.slides || []).map((slide) => [slide.id, { ...slide }])));
-    const pendingPublication = (selected.publicacoes || []).find((publication) => publication.status === 'AGENDADO');
-    setScheduleForm({
-      agendado_para: pendingPublication ? toLocalDateInput(new Date(pendingPublication.agendado_para)) : toLocalDateInput(),
-      plataforma: pendingPublication?.plataforma || 'instagram',
-    });
-    setRescheduleForms(Object.fromEntries((selected.publicacoes || []).map((publication) => [
-      publication.id,
-      {
-        agendado_para: toLocalDateInput(new Date(publication.agendado_para)),
-        plataforma: publication.plataforma,
-      },
-    ])));
   }, [selected]);
 
   const refresh = () => run(() => loadData(selectedId), 'Dados atualizados.').catch(() => {});
 
-  const saveAdminToken = (event) => {
+  const submitAuth = (mode, payload) => {
+    setLoading(true);
+    setAuthError('');
+    const action = mode === 'register' ? api.register : api.login;
+    action(payload)
+      .then(async (result) => {
+        setUser(result.usuario);
+        const currentConfig = await api.getConfiguracoes();
+        setConfig(currentConfig);
+        await loadData(null);
+      })
+      .catch((err) => setAuthError(err.message || 'Falha ao autenticar.'))
+      .finally(() => setLoading(false));
+  };
+
+  const logout = () => {
+    api.logout();
+    setUser(null);
+    setCarrosseis([]);
+    setLogs([]);
+    setSelectedId(null);
+  };
+
+  const openSettings = () => {
+    setSettingsForm({});
+    setSettingsOpen(true);
+  };
+
+  const saveSettings = (event) => {
     event.preventDefault();
-    api.setAdminToken(adminTokenInput);
-    setAdminTokenInput(api.getAdminToken());
-    showNotice('Token admin atualizado.');
+    const payload = Object.fromEntries(Object.entries(settingsForm).filter(([, value]) => value !== undefined));
+    run(async () => {
+      const currentConfig = await api.saveConfiguracoes(payload);
+      setConfig(currentConfig);
+      setSettingsForm({});
+      setSettingsOpen(false);
+    }, 'Configurações salvas.').catch(() => {});
   };
 
   const createCarrossel = (event) => {
@@ -164,7 +196,6 @@ export default function App() {
       texto_principal: slide.texto_principal || null,
       texto_secundario: slide.texto_secundario || null,
       observacao_visual: slide.observacao_visual || null,
-      aprovado: slide.aprovado,
     });
     await loadData(selected.id);
   }, 'Slide salvo.').catch(() => {});
@@ -180,36 +211,15 @@ export default function App() {
   }, message).catch(() => {});
 
   const renderSlides = () => {
-    const activeAsset = [...(selected?.assets || [])].filter((asset) => asset.status === 'ATIVO').sort((a, b) => b.id - a.id)[0];
+    const activeAsset = [...(selected?.assets || [])].filter((asset) => asset.status === 'ATIVO' && asset.tipo === 'background').sort((a, b) => b.id - a.id)[0];
     return simpleAction((id) => api.renderSlides(id, {
       template: renderForm.template || null,
       brand_name: renderForm.brand_name || null,
       primary_color: renderForm.primary_color || null,
       asset_id: renderForm.use_asset && activeAsset ? activeAsset.id : null,
-    }), 'Slides renderizados. Agora revise e aprove.');
+      aspect_ratio: renderForm.aspect_ratio || '4:5',
+    }), 'Slides renderizados. Revise os previews.');
   };
-
-  const schedule = () => run(async () => {
-    await api.schedule(selected.id, {
-      agendado_para: toIsoFromLocal(scheduleForm.agendado_para),
-      plataforma: scheduleForm.plataforma || 'instagram',
-    });
-    await loadData(selected.id);
-  }, 'Publicação agendada.').catch(() => {});
-
-  const reschedule = (publicationId) => run(async () => {
-    const form = rescheduleForms[publicationId];
-    await api.reschedule(publicationId, {
-      agendado_para: toIsoFromLocal(form.agendado_para),
-      plataforma: form.plataforma || 'instagram',
-    });
-    await loadData(selected.id);
-  }, 'Publicação reagendada.').catch(() => {});
-
-  const cancelPublication = (publicationId) => run(async () => {
-    await api.cancelPublication(publicationId);
-    await loadData(selected.id);
-  }, 'Publicação cancelada.').catch(() => {});
 
   const regenerateCarrossel = () => {
     const confirmed = window.confirm(
@@ -219,37 +229,51 @@ export default function App() {
     simpleAction(api.regenerate, 'Slides regenerados. Revise o texto antes de renderizar.');
   };
 
+  if (checkingAuth) {
+    return <div className="flex min-h-screen items-center justify-center bg-paper text-sm text-ink/60">Carregando sessão...</div>;
+  }
+
+  if (!user) {
+    return <AuthScreen onLogin={submitAuth} loading={loading} error={authError} />;
+  }
+
   return (
     <div className="min-h-screen bg-paper text-ink">
       <header className="border-b border-line bg-white px-4 py-3">
         <div className="mx-auto flex max-w-[1800px] flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-ink">Content Carousel Console</h1>
-            <p className="text-sm text-ink/55">Crie a ideia, gere slides, revise, renderize e então aprove ou agende.</p>
+            <p className="text-sm text-ink/55">Crie a ideia, gere slides, revise e renderize os previews.</p>
           </div>
-          <form className="flex flex-wrap items-end justify-end gap-2" onSubmit={saveAdminToken}>
-            <label className="min-w-[220px]">
-              <span className="field-label">Token admin</span>
-              <input
-                className="input mt-1"
-                type="password"
-                value={adminTokenInput}
-                onChange={(event) => setAdminTokenInput(event.target.value)}
-                placeholder="ccp_admin_token"
-                autoComplete="off"
-              />
-            </label>
-            <button className="secondary-button" type="submit" disabled={loading}>
-              <KeyRound className="h-4 w-4" />
-              Salvar token
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="text-right text-sm text-ink/60">
+              <div className="font-semibold text-ink">{user.nome}</div>
+              <div>{config?.openai_configurado ? 'OpenAI configurada' : 'OpenAI pendente'}</div>
+            </div>
+            <button className="secondary-button" type="button" onClick={openSettings}>
+              <Settings className="h-4 w-4" /> Configurações
+            </button>
+            <button className="secondary-button" type="button" onClick={logout}>
+              <LogOut className="h-4 w-4" /> Sair
             </button>
             <div className="flex items-center gap-2 text-sm text-ink/60">
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
               <span>{loading ? 'Processando' : 'Pronto'}</span>
             </div>
-          </form>
+          </div>
         </div>
       </header>
+
+      {settingsOpen && (
+        <SettingsPanel
+          config={config}
+          form={settingsForm}
+          onChange={setSettingsForm}
+          onClose={() => setSettingsOpen(false)}
+          onSubmit={saveSettings}
+          loading={loading}
+        />
+      )}
 
       <div className="mx-auto grid max-w-[1800px] gap-4 p-4 xl:grid-cols-[320px_minmax(0,1fr)_360px]">
         <CarrosselList
@@ -289,11 +313,7 @@ export default function App() {
         <div className="flex min-h-0 flex-col gap-4">
           <ActionPanel
             selected={selected}
-            scheduleForm={scheduleForm}
-            rescheduleForms={rescheduleForms}
             renderForm={renderForm}
-            onScheduleForm={setScheduleForm}
-            onRescheduleForm={(publicationId, next) => setRescheduleForms((current) => ({ ...current, [publicationId]: next }))}
             onRenderForm={setRenderForm}
             onGenerate={() => simpleAction(api.generate, 'Slides gerados. Revise o texto antes de renderizar.')}
             onRegenerate={regenerateCarrossel}
@@ -303,12 +323,6 @@ export default function App() {
               await api.deleteAsset(assetId);
               await loadData(selected.id);
             }, 'Asset visual removido.').catch(() => {})}
-            onApprove={() => simpleAction(api.approve, 'Carrossel aprovado. Agora você pode agendar ou publicar teste.')}
-            onReject={() => simpleAction(api.reject, 'Carrossel rejeitado.')}
-            onSchedule={schedule}
-            onReschedule={reschedule}
-            onCancelPublication={cancelPublication}
-            onPublishNow={() => simpleAction(api.publishNow, 'Publicação teste concluída.')}
             loading={loading}
           />
           <LogsPanel logs={logs} selectedId={selectedId} />
