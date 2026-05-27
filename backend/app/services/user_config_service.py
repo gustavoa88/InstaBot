@@ -9,9 +9,6 @@ from app.security import decrypt_secret, encrypt_secret, mask_secret
 @dataclass
 class UserCredentials:
     openai_api_key: str | None = None
-    instagram_access_token: str | None = None
-    instagram_user_id: str | None = None
-    facebook_page_id: str | None = None
 
 
 def get_or_create_config(db: Session, usuario: Usuario) -> UsuarioConfiguracao:
@@ -28,9 +25,6 @@ def update_config(db: Session, usuario: Usuario, payload) -> UsuarioConfiguracao
     data = payload.model_dump(exclude_unset=True)
     field_map = {
         "openai_api_key": "openai_api_key_encrypted",
-        "instagram_access_token": "instagram_access_token_encrypted",
-        "instagram_user_id": "instagram_user_id_encrypted",
-        "facebook_page_id": "facebook_page_id_encrypted",
     }
     for input_name, column_name in field_map.items():
         if input_name in data:
@@ -45,9 +39,6 @@ def credentials_from_config(config: UsuarioConfiguracao | None) -> UserCredentia
         return UserCredentials()
     return UserCredentials(
         openai_api_key=decrypt_secret(config.openai_api_key_encrypted),
-        instagram_access_token=decrypt_secret(config.instagram_access_token_encrypted),
-        instagram_user_id=decrypt_secret(config.instagram_user_id_encrypted),
-        facebook_page_id=decrypt_secret(config.facebook_page_id_encrypted),
     )
 
 
@@ -60,9 +51,5 @@ def config_public(config: UsuarioConfiguracao | None) -> dict:
     creds = credentials_from_config(config)
     return {
         "openai_configurado": bool(creds.openai_api_key),
-        "instagram_configurado": bool(creds.instagram_access_token and creds.instagram_user_id and creds.facebook_page_id),
         "openai_api_key_masked": mask_secret(creds.openai_api_key),
-        "instagram_access_token_masked": mask_secret(creds.instagram_access_token),
-        "instagram_user_id_masked": mask_secret(creds.instagram_user_id),
-        "facebook_page_id_masked": mask_secret(creds.facebook_page_id),
     }

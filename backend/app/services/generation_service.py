@@ -71,7 +71,7 @@ def gerar_carrossel_mockado(db: Session, carrossel: Carrossel, *, regenerar: boo
         )
 
     carrossel.legenda = carrossel.legenda or f"{carrossel.titulo}\n\nConteúdo gerado para revisão manual."
-    carrossel.hashtags = carrossel.hashtags or ["#conteudo", "#carrossel", "#instagram"]
+    carrossel.hashtags = carrossel.hashtags or ["#conteudo", "#carrossel", "#conteudo"]
     carrossel.ia_resultado = {
         "mock": True,
         "quantidade_slides": quantidade,

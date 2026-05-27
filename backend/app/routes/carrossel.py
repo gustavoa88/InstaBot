@@ -1,9 +1,12 @@
 from datetime import datetime
+from io import BytesIO
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
+from app.config import STORAGE_PATH
 from app.database import get_db
 from app.models.carrossel import (
     ASSET_STATUS_ATIVO,
@@ -11,32 +14,23 @@ from app.models.carrossel import (
     CarrosselAsset,
     CarrosselSlide,
     LogExecucao,
-    Publicacao,
     Usuario,
-    STATUS_AGENDADO,
     STATUS_AGUARDANDO_APROVACAO,
-    STATUS_APROVADO,
-    STATUS_CANCELADO,
-    STATUS_PUBLICADO,
-    STATUS_REJEITADO,
 )
 from app.schemas.carrossel import (
-    AgendamentoCreate,
     AssetVisualRead,
     CarrosselCreate,
     CarrosselRead,
     CarrosselUpdate,
     LogExecucaoRead,
-    PublicacaoRead,
-    ReagendamentoUpdate,
     RenderizacaoCreate,
     SlideRead,
     SlideUpdate,
 )
 from app.services.generation_service import gerar_carrossel_textual
+from app.services.export_service import export_carousel_to_zip
 from app.services.image_asset_service import gerar_asset_visual, remover_asset_visual
 from app.services.log_service import registrar_log
-from app.services.publication_service import publicar_real_instagram
 from app.security import get_current_user
 from app.services.render_service import renderizar_carrossel_slides
 from app.services.user_config_service import credentials_for_user
@@ -47,7 +41,7 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 def buscar_carrossel(db: Session, carrossel_id: int, usuario: Usuario) -> Carrossel:
     carrossel = (
         db.query(Carrossel)
-        .options(joinedload(Carrossel.slides), joinedload(Carrossel.publicacoes), joinedload(Carrossel.assets))
+        .options(joinedload(Carrossel.slides), joinedload(Carrossel.assets))
         .filter(Carrossel.id == carrossel_id)
         .filter(Carrossel.usuario_id == usuario.id)
         .first()
@@ -55,19 +49,6 @@ def buscar_carrossel(db: Session, carrossel_id: int, usuario: Usuario) -> Carros
     if carrossel is None:
         raise HTTPException(status_code=404, detail="Carrossel não encontrado.")
     return carrossel
-
-
-def buscar_publicacao(db: Session, publicacao_id: int, usuario: Usuario) -> Publicacao:
-    publicacao = (
-        db.query(Publicacao)
-        .join(Carrossel, Publicacao.carrossel_id == Carrossel.id)
-        .filter(Publicacao.id == publicacao_id)
-        .filter(Carrossel.usuario_id == usuario.id)
-        .first()
-    )
-    if publicacao is None:
-        raise HTTPException(status_code=404, detail="Publicação não encontrada.")
-    return publicacao
 
 
 def buscar_asset(db: Session, asset_id: int, usuario: Usuario) -> CarrosselAsset:
@@ -111,7 +92,7 @@ def criar_carrossel(payload: CarrosselCreate, db: Session = Depends(get_db), usu
 def listar_carrosseis(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
     return (
         db.query(Carrossel)
-        .options(joinedload(Carrossel.slides), joinedload(Carrossel.publicacoes), joinedload(Carrossel.assets))
+        .options(joinedload(Carrossel.slides), joinedload(Carrossel.assets))
         .filter(Carrossel.usuario_id == usuario.id)
         .order_by(Carrossel.created_at.desc())
         .offset(skip)
@@ -123,6 +104,19 @@ def listar_carrosseis(skip: int = 0, limit: int = 100, db: Session = Depends(get
 @router.get("/carrosseis/{carrossel_id}", response_model=CarrosselRead)
 def obter_carrossel(carrossel_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
     return buscar_carrossel(db, carrossel_id, usuario)
+
+
+@router.get("/carrosseis/{carrossel_id}/exportar-calendar")
+def exportar_carrossel_calendar(carrossel_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
+    carrossel = buscar_carrossel(db, carrossel_id, usuario)
+    try:
+        zip_bytes = export_carousel_to_zip(db, carrossel, STORAGE_PATH)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    filename = f"carousel_{carrossel.id}_{timestamp}.zip"
+    headers = {"Content-Disposition": f"attachment; filename=\"{filename}\""}
+    return StreamingResponse(BytesIO(zip_bytes), media_type="application/zip", headers=headers)
 
 
 @router.put("/carrosseis/{carrossel_id}", response_model=CarrosselRead)
@@ -287,186 +281,6 @@ def atualizar_slide(slide_id: int, payload: SlideUpdate, db: Session = Depends(g
     db.commit()
     db.refresh(slide)
     return slide
-
-
-@router.post("/carrosseis/{carrossel_id}/aprovar", response_model=CarrosselRead)
-def aprovar_carrossel(carrossel_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
-    carrossel = buscar_carrossel(db, carrossel_id, usuario)
-    if not carrossel.slides:
-        raise HTTPException(status_code=409, detail="Não é possível aprovar sem slides gerados.")
-    carrossel.status = STATUS_APROVADO
-    carrossel.aprovado = True
-    carrossel.aprovado_em = datetime.utcnow()
-    registrar_log(
-        db,
-        carrossel_id=carrossel.id,
-        etapa="aprovacao",
-        status="APROVADO",
-        mensagem="Carrossel aprovado manualmente.",
-    )
-    db.commit()
-    db.refresh(carrossel)
-    return carrossel
-
-
-@router.post("/carrosseis/{carrossel_id}/rejeitar", response_model=CarrosselRead)
-def rejeitar_carrossel(carrossel_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
-    carrossel = buscar_carrossel(db, carrossel_id, usuario)
-    if carrossel.status == STATUS_PUBLICADO:
-        raise HTTPException(status_code=409, detail="Carrossel publicado não pode ser rejeitado.")
-    carrossel.status = STATUS_REJEITADO
-    carrossel.aprovado = False
-    registrar_log(
-        db,
-        carrossel_id=carrossel.id,
-        etapa="aprovacao",
-        status="REJEITADO",
-        mensagem="Carrossel rejeitado manualmente.",
-    )
-    db.commit()
-    db.refresh(carrossel)
-    return carrossel
-
-
-@router.post("/carrosseis/{carrossel_id}/agendar", response_model=PublicacaoRead)
-def agendar_carrossel(
-    carrossel_id: int,
-    payload: AgendamentoCreate,
-    db: Session = Depends(get_db),
-    usuario: Usuario = Depends(get_current_user),
-):
-    carrossel = buscar_carrossel(db, carrossel_id, usuario)
-    if carrossel.status != STATUS_APROVADO:
-        raise HTTPException(status_code=409, detail="Apenas carrosséis aprovados podem ser agendados.")
-    publicacao = Publicacao(
-        carrossel_id=carrossel.id,
-        plataforma=payload.plataforma,
-        agendado_para=payload.agendado_para,
-        status=STATUS_AGENDADO,
-    )
-    carrossel.status = STATUS_AGENDADO
-    carrossel.agendado_para = payload.agendado_para
-    db.add(publicacao)
-    db.flush()
-    registrar_log(
-        db,
-        carrossel_id=carrossel.id,
-        etapa="agendamento",
-        status="AGENDADO",
-        mensagem="Publicação agendada.",
-        detalhes={"publicacao_id": publicacao.id, "agendado_para": payload.agendado_para.isoformat()},
-    )
-    db.commit()
-    db.refresh(publicacao)
-    return publicacao
-
-
-@router.put("/publicacoes/{publicacao_id}/reagendar", response_model=PublicacaoRead)
-def reagendar_publicacao(
-    publicacao_id: int,
-    payload: ReagendamentoUpdate,
-    db: Session = Depends(get_db),
-    usuario: Usuario = Depends(get_current_user),
-):
-    publicacao = buscar_publicacao(db, publicacao_id, usuario)
-    if publicacao.status == STATUS_PUBLICADO:
-        raise HTTPException(status_code=409, detail="Publicações já publicadas não podem ser reagendadas.")
-    if publicacao.status != STATUS_AGENDADO:
-        raise HTTPException(status_code=409, detail="Apenas publicações agendadas podem ser reagendadas.")
-
-    anterior = publicacao.agendado_para
-    publicacao.agendamento_anterior = anterior
-    publicacao.agendado_para = payload.agendado_para
-    publicacao.reagendado = True
-    publicacao.reagendado_em = datetime.utcnow()
-    if payload.plataforma:
-        publicacao.plataforma = payload.plataforma
-
-    publicacao.carrossel.agendado_para = payload.agendado_para
-    registrar_log(
-        db,
-        carrossel_id=publicacao.carrossel_id,
-        etapa="reagendamento",
-        status="REAGENDADO",
-        mensagem="Publicação reagendada.",
-        detalhes={
-            "publicacao_id": publicacao.id,
-            "agendamento_anterior": anterior.isoformat(),
-            "novo_agendamento": payload.agendado_para.isoformat(),
-        },
-    )
-    db.commit()
-    db.refresh(publicacao)
-    return publicacao
-
-
-@router.post("/publicacoes/{publicacao_id}/cancelar", response_model=PublicacaoRead)
-def cancelar_publicacao(publicacao_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
-    publicacao = buscar_publicacao(db, publicacao_id, usuario)
-    if publicacao.status == STATUS_PUBLICADO:
-        raise HTTPException(status_code=409, detail="Publicações já publicadas não podem ser canceladas.")
-    publicacao.status = STATUS_CANCELADO
-    publicacao.carrossel.status = STATUS_CANCELADO
-    registrar_log(
-        db,
-        carrossel_id=publicacao.carrossel_id,
-        etapa="cancelamento",
-        status="CANCELADO",
-        mensagem="Publicação cancelada.",
-        detalhes={"publicacao_id": publicacao.id},
-    )
-    db.commit()
-    db.refresh(publicacao)
-    return publicacao
-
-
-@router.post("/carrosseis/{carrossel_id}/publicar-agora", response_model=PublicacaoRead)
-def publicar_agora(carrossel_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
-    carrossel = buscar_carrossel(db, carrossel_id, usuario)
-    if carrossel.status == STATUS_PUBLICADO:
-        raise HTTPException(status_code=409, detail="Carrossel já publicado.")
-    if carrossel.status not in {STATUS_APROVADO, STATUS_AGENDADO}:
-        raise HTTPException(status_code=409, detail="Apenas carrosséis aprovados ou agendados podem ser publicados.")
-
-    publicacao = (
-        db.query(Publicacao)
-        .filter(Publicacao.carrossel_id == carrossel.id)
-        .filter(Publicacao.status == STATUS_AGENDADO)
-        .order_by(Publicacao.agendado_para.asc())
-        .first()
-    )
-    if publicacao is None:
-        publicacao = Publicacao(
-            carrossel_id=carrossel.id,
-            plataforma="instagram",
-            agendado_para=datetime.utcnow(),
-            status=STATUS_AGENDADO,
-        )
-        db.add(publicacao)
-        db.flush()
-
-    publicar_real_instagram(db, publicacao, credentials=credentials_for_user(db, usuario))
-    db.commit()
-    db.refresh(publicacao)
-    return publicacao
-
-
-@router.get("/publicacoes", response_model=list[PublicacaoRead])
-def listar_publicacoes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
-    return (
-        db.query(Publicacao)
-        .join(Carrossel, Publicacao.carrossel_id == Carrossel.id)
-        .filter(Carrossel.usuario_id == usuario.id)
-        .order_by(Publicacao.agendado_para.desc())
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
-
-
-@router.get("/publicacoes/{publicacao_id}", response_model=PublicacaoRead)
-def obter_publicacao(publicacao_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
-    return buscar_publicacao(db, publicacao_id, usuario)
 
 
 @router.get("/logs", response_model=list[LogExecucaoRead])

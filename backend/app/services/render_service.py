@@ -101,8 +101,8 @@ def _brand_text(carrossel: Carrossel, brand_name: str | None) -> str:
 def _prompt_full_slide(carrossel: Carrossel, slide, *, brand: str, primary_color: str) -> str:
     secondary = (getattr(slide, "texto_secundario", None) or "").strip()
     return f"""
-Crie UM slide final vertical para Instagram, pronto para publicação, com estética editorial premium.
-Formato: imagem vertical Instagram 1080x1350, proporção 4:5, composição moderna, instagramável, forte hierarquia visual, margens seguras e alta legibilidade.
+Crie UM slide final vertical para redes sociais, pronto para uso, com estética editorial premium.
+Formato: imagem vertical 1080x1350, proporção 4:5, composição moderna, forte hierarquia visual, margens seguras e alta legibilidade.
 
 Contexto do carrossel:
 - Título: {getattr(carrossel, 'titulo', None) or 'Carrossel'}
@@ -119,11 +119,14 @@ Campos obrigatórios do slide, que devem aparecer exatamente como fornecidos:
 - observacao_visual: {getattr(slide, 'observacao_visual', None) or 'visual editorial forte e coerente com o tema'}
 
 Regras obrigatórias:
-- Use OPENAI_IMAGE_MODEL/DALL·E para gerar uma imagem final vertical Instagram 1080x1350.
-- Renderize o titulo, texto_principal e texto_secundario dentro da própria imagem, exatamente como fornecidos nos campos acima, sem reescrever, resumir, traduzir ou acrescentar palavras.
+- Use OPENAI_IMAGE_MODEL/DALL·E para gerar uma imagem final vertical 1080x1350, usando OPENAI_IMAGE_SIZE como referência técnica.
+- Render the slide title, main text and secondary text inside the image, fully contained within the visible 1080x1350 frame.
+- Keep at least 10-12% margin on all sides.
+- Wrap text and use a clean text panel/hierarchy so no lines are cropped or extend outside the slide.
+- Renderize titulo, texto_principal e texto_secundario exatamente como fornecidos nos campos acima, sem reescrever, resumir, traduzir ou acrescentar palavras.
 - Se texto_secundario estiver vazio, não invente texto secundário.
 - Use observacao_visual como direção criativa para cenário, estilo, composição, cores, textura e elementos visuais.
-- Mantenha formato Instagram vertical 4:5, margens seguras, contraste suficiente, espaçamento confortável e legibilidade alta em tela de celular.
+- Mantenha formato vertical 4:5, margens seguras, contraste suficiente, espaçamento confortável e legibilidade alta em tela de celular.
 - Use imagens, ilustração ou fotografia como parte da composição, sem prejudicar a leitura dos textos.
 - Não use logotipos reais, marcas registradas nem pessoas identificáveis.
 """.strip()

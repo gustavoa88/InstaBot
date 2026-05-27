@@ -34,7 +34,6 @@ class SlideUpdate(BaseModel):
     imagem_path: str | None = Field(default=None, max_length=1000)
     imagem_url: str | None = Field(default=None, max_length=1000)
     layout_config: dict[str, Any] | None = None
-    aprovado: bool | None = None
 
 
 class RenderizacaoCreate(BaseModel):
@@ -42,16 +41,6 @@ class RenderizacaoCreate(BaseModel):
     brand_name: str | None = Field(default=None, max_length=80)
     primary_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     asset_id: int | None = Field(default=None, ge=1)
-
-
-class AgendamentoCreate(BaseModel):
-    agendado_para: datetime
-    plataforma: str = Field(default="instagram", max_length=50)
-
-
-class ReagendamentoUpdate(BaseModel):
-    agendado_para: datetime
-    plataforma: str | None = Field(default=None, max_length=50)
 
 
 class SlideRead(BaseModel):
@@ -67,7 +56,6 @@ class SlideRead(BaseModel):
     imagem_path: str | None = None
     imagem_url: str | None = None
     layout_config: dict[str, Any] | None = None
-    aprovado: bool
     created_at: datetime
     updated_at: datetime
 
@@ -85,25 +73,6 @@ class AssetVisualRead(BaseModel):
     asset_url: str | None = None
     modelo: str | None = None
     provider_response: dict[str, Any] | None = None
-    created_at: datetime
-    updated_at: datetime
-
-
-class PublicacaoRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    carrossel_id: int
-    plataforma: str
-    status: str
-    agendado_para: datetime
-    publicado_em: datetime | None = None
-    external_post_id: str | None = None
-    resposta_api: dict[str, Any] | None = None
-    erro: str | None = None
-    reagendado: bool
-    reagendado_em: datetime | None = None
-    agendamento_anterior: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -135,15 +104,9 @@ class CarrosselRead(BaseModel):
     hashtags: list[str] | None = None
     prompt_config: dict[str, Any] | None = None
     ia_resultado: dict[str, Any] | None = None
-    aprovado: bool
-    aprovado_em: datetime | None = None
-    agendado_para: datetime | None = None
-    publicado_em: datetime | None = None
-    erro_publicacao: str | None = None
     created_at: datetime
     updated_at: datetime
     slides: list[SlideRead] = Field(default_factory=list)
-    publicacoes: list[PublicacaoRead] = Field(default_factory=list)
     assets: list[AssetVisualRead] = Field(default_factory=list)
 
 
@@ -176,15 +139,8 @@ class TokenRead(BaseModel):
 
 class ConfiguracaoUpdate(BaseModel):
     openai_api_key: str | None = Field(default=None, max_length=500)
-    instagram_access_token: str | None = Field(default=None, max_length=1000)
-    instagram_user_id: str | None = Field(default=None, max_length=100)
-    facebook_page_id: str | None = Field(default=None, max_length=100)
 
 
 class ConfiguracaoRead(BaseModel):
     openai_configurado: bool
-    instagram_configurado: bool
     openai_api_key_masked: str | None = None
-    instagram_access_token_masked: str | None = None
-    instagram_user_id_masked: str | None = None
-    facebook_page_id_masked: str | None = None

@@ -333,7 +333,7 @@ def test_render_service_uses_openai_full_slide_for_each_slide(tmp_path, monkeypa
     assert "texto_principal:" in prompt
     assert "texto_secundario:" in prompt
     assert "observacao_visual:" in prompt
-    assert "Renderize o titulo, texto_principal e texto_secundario" in prompt
+    assert "Renderize titulo, texto_principal e texto_secundario" in prompt
     assert "do not include text" not in prompt.lower()
     first_render = tmp_path / first_slide.imagem_path
     second_render = tmp_path / second_slide.imagem_path
