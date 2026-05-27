@@ -77,7 +77,7 @@ export const api = {
   deleteCarrossel: (id) => request(`/carrosseis/${id}`, { method: 'DELETE' }),
   generate: (id) => json('POST', `/carrosseis/${id}/gerar`),
   regenerate: (id) => json('POST', `/carrosseis/${id}/regenerar`),
-  renderSlides: (id, payload) => json('POST', `/carrosseis/${id}/renderizar`, payload),
+  renderSlides: (id, payload = {}) => json('POST', `/carrosseis/${id}/renderizar`, { ...payload, aspect_ratio: payload.aspect_ratio || '4:5' }),
   generateAsset: (id) => json('POST', `/carrosseis/${id}/assets/gerar`),
   listAssets: (id) => request(`/carrosseis/${id}/assets`),
   deleteAsset: (id) => request(`/assets/${id}`, { method: 'DELETE' }),

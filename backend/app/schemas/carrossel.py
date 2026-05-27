@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -41,6 +41,7 @@ class RenderizacaoCreate(BaseModel):
     brand_name: str | None = Field(default=None, max_length=80)
     primary_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     asset_id: int | None = Field(default=None, ge=1)
+    aspect_ratio: Literal["1:1", "1.91:1", "4:5"] = "4:5"
 
 
 class SlideRead(BaseModel):

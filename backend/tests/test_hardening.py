@@ -52,6 +52,9 @@ def test_payload_limits_reject_oversized_text():
     with pytest.raises(ValidationError):
         RenderizacaoCreate(primary_color="azul")
 
+    with pytest.raises(ValidationError):
+        RenderizacaoCreate(aspect_ratio="story")
+
 
 def test_storage_path_resolver_rejects_traversal(tmp_path):
     storage_root = tmp_path.resolve()
@@ -318,12 +321,20 @@ def test_render_service_uses_openai_full_slide_for_each_slide(tmp_path, monkeypa
     carrossel.publico_alvo = "Entusiastas de carros clássicos"
     carrossel.tom = "histórico e nostálgico"
 
-    render_service.renderizar_carrossel_slides(FakeDb(), carrossel, template="clean_editorial", usuario=SimpleNamespace(is_admin=True))
+    render_service.renderizar_carrossel_slides(
+        FakeDb(),
+        carrossel,
+        template="clean_editorial",
+        usuario=SimpleNamespace(is_admin=True),
+        aspect_ratio="1:1",
+    )
 
     assert len(calls) == 2
     assert first_slide.layout_config["renderer"] == "openai_full_slide"
     assert second_slide.layout_config["renderer"] == "openai_full_slide"
     assert first_slide.layout_config["image_model"] == "gpt-image-test"
+    assert first_slide.layout_config["aspect_ratio_value"] == "1:1"
+    assert first_slide.layout_config["canvas"] == {"width": 1080, "height": 1080}
     assert "O começo: um projeto visionário" in first_slide.layout_config["image_prompt"]
     assert "Foto antiga do primeiro Fusca" in second_slide.layout_config["image_prompt"]
     assert first_slide.layout_config["slide_asset_path"] is None
@@ -333,6 +344,9 @@ def test_render_service_uses_openai_full_slide_for_each_slide(tmp_path, monkeypa
     assert "texto_principal:" in prompt
     assert "texto_secundario:" in prompt
     assert "observacao_visual:" in prompt
+    assert "quadrado 1:1" in prompt
+    assert "1080x1080" in prompt
+    assert "totalmente contidos no quadro visível" in prompt
     assert "Renderize titulo, texto_principal e texto_secundario" in prompt
     assert "do not include text" not in prompt.lower()
     first_render = tmp_path / first_slide.imagem_path

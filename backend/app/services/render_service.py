@@ -19,8 +19,14 @@ from app.services.image_asset_service import (
 )
 from app.services.log_service import registrar_log
 
-CANVAS_SIZE = (1080, 1350)
 OPENAI_API_KEY = ""
+ASPECT_RATIO_OPTIONS = {
+    "1:1": {"label": "Quadrado 1:1", "width": 1080, "height": 1080, "description": "quadrado 1:1"},
+    "1.91:1": {"label": "Horizontal 1,91:1", "width": 1080, "height": 566, "description": "horizontal 1,91:1"},
+    "4:5": {"label": "Vertical 4:5", "width": 1080, "height": 1350, "description": "vertical 4:5"},
+}
+DEFAULT_ASPECT_RATIO = "4:5"
+
 DEFAULT_TEMPLATE = "mvp_deterministic_v1"
 DEFAULT_PRIMARY_COLOR = "#6f9684"
 
@@ -84,7 +90,6 @@ def _template_name(template: str | None) -> str:
     candidate = (template or DEFAULT_TEMPLATE).strip()
     return candidate if candidate in TEMPLATES else DEFAULT_TEMPLATE
 
-
 def _text_or_fallback(*values: Any, fallback: str = "Content Carousel") -> str:
     for value in values:
         if value:
@@ -94,15 +99,21 @@ def _text_or_fallback(*values: Any, fallback: str = "Content Carousel") -> str:
     return fallback
 
 
+def _aspect_ratio_config(aspect_ratio: str | None) -> dict[str, Any]:
+    return ASPECT_RATIO_OPTIONS.get(aspect_ratio or DEFAULT_ASPECT_RATIO, ASPECT_RATIO_OPTIONS[DEFAULT_ASPECT_RATIO])
+
+
 def _brand_text(carrossel: Carrossel, brand_name: str | None) -> str:
     return _text_or_fallback(brand_name, getattr(carrossel, "tema", None), fallback="Content Carousel")[:80]
 
 
-def _prompt_full_slide(carrossel: Carrossel, slide, *, brand: str, primary_color: str) -> str:
+def _prompt_full_slide(carrossel: Carrossel, slide, *, brand: str, primary_color: str, aspect: dict[str, Any]) -> str:
     secondary = (getattr(slide, "texto_secundario", None) or "").strip()
+    width = aspect["width"]
+    height = aspect["height"]
     return f"""
-Crie UM slide final vertical para redes sociais, pronto para uso, com estética editorial premium.
-Formato: imagem vertical 1080x1350, proporção 4:5, composição moderna, forte hierarquia visual, margens seguras e alta legibilidade.
+Crie UM slide final para redes sociais, pronto para uso, com estética editorial premium.
+Formato: imagem {aspect["description"]}, canvas {width}x{height}px, composição moderna, forte hierarquia visual, margens seguras e alta legibilidade.
 
 Contexto do carrossel:
 - Título: {getattr(carrossel, 'titulo', None) or 'Carrossel'}
@@ -119,14 +130,14 @@ Campos obrigatórios do slide, que devem aparecer exatamente como fornecidos:
 - observacao_visual: {getattr(slide, 'observacao_visual', None) or 'visual editorial forte e coerente com o tema'}
 
 Regras obrigatórias:
-- Use OPENAI_IMAGE_MODEL/DALL·E para gerar uma imagem final vertical 1080x1350, usando OPENAI_IMAGE_SIZE como referência técnica.
-- Render the slide title, main text and secondary text inside the image, fully contained within the visible 1080x1350 frame.
-- Keep at least 10-12% margin on all sides.
-- Wrap text and use a clean text panel/hierarchy so no lines are cropped or extend outside the slide.
-- Renderize titulo, texto_principal e texto_secundario exatamente como fornecidos nos campos acima, sem reescrever, resumir, traduzir ou acrescentar palavras.
+- Use OPENAI_IMAGE_MODEL/DALL·E para gerar uma imagem final no formato {aspect["description"]}, com enquadramento visual equivalente a {width}x{height}px, usando OPENAI_IMAGE_SIZE como referência técnica.
+- Renderize o título, texto principal e texto secundário dentro da imagem, totalmente contidos no quadro visível de {width}x{height}px.
+- Use margens seguras de pelo menos 10-12% em todos os lados.
+- Quebre linhas e use hierarquia visual clara para que nenhum texto seja cortado, encoste nas bordas ou saia do quadro.
+- Renderize titulo, texto_principal e texto_secundario exatamente como fornecidos nos campos acima, sem alterar, reduzir, reescrever, resumir, traduzir ou acrescentar palavras.
 - Se texto_secundario estiver vazio, não invente texto secundário.
 - Use observacao_visual como direção criativa para cenário, estilo, composição, cores, textura e elementos visuais.
-- Mantenha formato vertical 4:5, margens seguras, contraste suficiente, espaçamento confortável e legibilidade alta em tela de celular.
+- Mantenha a proporção {aspect["description"]}, margens seguras, contraste suficiente, espaçamento confortável e legibilidade alta.
 - Use imagens, ilustração ou fotografia como parte da composição, sem prejudicar a leitura dos textos.
 - Não use logotipos reais, marcas registradas nem pessoas identificáveis.
 """.strip()
@@ -210,6 +221,7 @@ def _render_slide_with_openai(
     api_key: str | None,
     usuario: Usuario | None = None,
     max_attempts: int = 1,
+    aspect: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     effective_api_key = api_key if api_key is not None else (OPENAI_API_KEY or None)
     if not openai_image_configurado(effective_api_key):
@@ -227,7 +239,8 @@ def _render_slide_with_openai(
         )
         raise HTTPException(status_code=429, detail="Limite de geração de imagem da OpenAI atingido. Tente novamente mais tarde ou ajuste os limites.")
 
-    prompt = _prompt_full_slide(carrossel, slide, brand=brand, primary_color=primary_color)
+    aspect_config = aspect or ASPECT_RATIO_OPTIONS[DEFAULT_ASPECT_RATIO]
+    prompt = _prompt_full_slide(carrossel, slide, brand=brand, primary_color=primary_color, aspect=aspect_config)
     prompt_hash = _prompt_hash(prompt)
     client = OpenAI(api_key=effective_api_key)
     last_error: Exception | None = None
@@ -242,6 +255,8 @@ def _render_slide_with_openai(
             detalhes={
                 "modelo": OPENAI_IMAGE_MODEL,
                 "size": OPENAI_IMAGE_SIZE,
+                "aspect_ratio": aspect_config["label"],
+                "canvas": {"width": aspect_config["width"], "height": aspect_config["height"]},
                 "slide_id": getattr(slide, "id", None),
                 "numero_slide": slide.numero_slide,
                 "prompt_hash": prompt_hash,
@@ -286,6 +301,9 @@ def _render_slide_with_openai(
         "provider": "openai",
         "image_model": OPENAI_IMAGE_MODEL,
         "image_size": OPENAI_IMAGE_SIZE,
+        "aspect_ratio": aspect_config["label"],
+        "aspect_ratio_value": next((key for key, value in ASPECT_RATIO_OPTIONS.items() if value == aspect_config), DEFAULT_ASPECT_RATIO),
+        "canvas": {"width": aspect_config["width"], "height": aspect_config["height"]},
         "resize_strategy": "openai_bytes_only",
         "image_prompt": prompt,
         "image_prompt_hash": prompt_hash,
@@ -314,6 +332,7 @@ def renderizar_carrossel_slides(
     asset=None,
     api_key: str | None = None,
     usuario: Usuario | None = None,
+    aspect_ratio: str | None = None,
 ) -> Carrossel:
     selected_template = _template_name(template)
     if asset is not None:
@@ -342,6 +361,7 @@ def renderizar_carrossel_slides(
     accent = _hex_to_rgb(primary_color, TEMPLATES[selected_template].get("default_color", DEFAULT_PRIMARY_COLOR))
     primary_hex = _rgb_to_hex(accent)
     max_attempts = OPENAI_ADMIN_IMAGE_RENDER_MAX_ATTEMPTS if bool(getattr(usuario, "is_admin", False)) else 1
+    aspect_config = _aspect_ratio_config(aspect_ratio)
 
     generated_slides: list[tuple[Any, Path, Path, Path, dict[str, Any]]] = []
     temp_paths: list[Path] = []
@@ -361,6 +381,7 @@ def renderizar_carrossel_slides(
                 api_key=effective_api_key,
                 usuario=usuario,
                 max_attempts=max_attempts,
+                aspect=aspect_config,
             )
             generated_slides.append((slide, relative_path, output_path, temp_path, {
                 "template": selected_template,
@@ -400,7 +421,9 @@ def renderizar_carrossel_slides(
             "fallback_reason": None,
             "fallback_error": None,
             "limit": None,
-            "canvas": {"width": CANVAS_SIZE[0], "height": CANVAS_SIZE[1]},
+            "aspect_ratio": render_options.get("aspect_ratio"),
+            "aspect_ratio_value": render_options.get("aspect_ratio_value"),
+            "canvas": render_options.get("canvas"),
             "rendered_at": datetime.utcnow().isoformat(),
         }
 
@@ -410,6 +433,6 @@ def renderizar_carrossel_slides(
         etapa="renderizacao",
         status="CONCLUIDO",
         mensagem="Renderização OpenAI-only dos slides concluída.",
-        detalhes={"slides_renderizados": len(carrossel.slides), "template": selected_template},
+        detalhes={"slides_renderizados": len(carrossel.slides), "template": selected_template, "aspect_ratio": aspect_config["label"], "canvas": {"width": aspect_config["width"], "height": aspect_config["height"]}},
     )
     return carrossel

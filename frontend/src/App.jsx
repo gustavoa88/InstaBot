@@ -21,6 +21,7 @@ const DEFAULT_RENDER_FORM = {
   brand_name: '',
   primary_color: '#6f9684',
   use_asset: true,
+  aspect_ratio: '4:5',
 };
 
 function normalizeCarrosselPayload(draft) {
@@ -216,6 +217,7 @@ export default function App() {
       brand_name: renderForm.brand_name || null,
       primary_color: renderForm.primary_color || null,
       asset_id: renderForm.use_asset && activeAsset ? activeAsset.id : null,
+      aspect_ratio: renderForm.aspect_ratio || '4:5',
     }), 'Slides renderizados. Revise os previews.');
   };
 

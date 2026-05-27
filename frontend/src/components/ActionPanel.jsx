@@ -13,6 +13,12 @@ const TEMPLATE_OPTIONS = [
   { value: 'soft_brand', label: 'Soft brand' },
 ];
 
+const ASPECT_RATIO_OPTIONS = [
+  { value: '1:1', label: 'Quadrado 1:1' },
+  { value: '1.91:1', label: 'Horizontal 1,91:1' },
+  { value: '4:5', label: 'Vertical 4:5' },
+];
+
 export function ActionPanel({
   selected,
   renderForm,
@@ -38,6 +44,7 @@ export function ActionPanel({
   const canRender = Boolean(selected.slides?.length);
   const canDownload = Boolean(selected.slides?.some((slide) => slide.imagem_url));
   const normalizedColor = /^#[0-9A-Fa-f]{6}$/.test(renderForm.primary_color) ? renderForm.primary_color : '#6f9684';
+
   const downloadSlides = async () => {
     try {
       const response = await api.downloadCarousel(selected.id);
@@ -54,7 +61,6 @@ export function ActionPanel({
       window.alert(error?.message || 'Não foi possível baixar os slides.');
     }
   };
-
 
   return (
     <aside className="panel rounded-md p-4">
@@ -109,6 +115,18 @@ export function ActionPanel({
               onChange={(event) => onRenderForm({ ...renderForm, template: event.target.value })}
             >
               {TEMPLATE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="mt-3 block">
+            <span className="field-label">Proporção dos slides</span>
+            <select
+              className="input mt-1"
+              value={renderForm.aspect_ratio || '4:5'}
+              onChange={(event) => onRenderForm({ ...renderForm, aspect_ratio: event.target.value })}
+            >
+              {ASPECT_RATIO_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>

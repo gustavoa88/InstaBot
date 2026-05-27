@@ -240,6 +240,7 @@ def renderizar_carrossel(
         asset=asset,
         api_key=credentials.openai_api_key,
         usuario=usuario,
+        aspect_ratio=opcoes.aspect_ratio,
     )
     db.commit()
     db.refresh(carrossel)
