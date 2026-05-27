@@ -27,13 +27,12 @@ def _resolve_slide_path(storage_root: Path, imagem_path: str | None) -> Path | N
 
 def _readme_text(carrossel) -> str:
     hashtags = " ".join(carrossel.hashtags or [])
-    return f"""INSTRUÇÕES: Como enviar seu Carrossel para Facebook Content Calendar
+    return f"""INSTRUCOES: Como usar os arquivos exportados
 =============================================================================
 
-1. Acesse: https://business.facebook.com/latest/content_calendar
-2. Clique em "Criar publicação" ou "Upload em lote"
-3. Selecione as imagens da pasta "slides/" em sequência (01.png, 02.png, etc.)
-4. Cole a legenda e hashtags (veja abaixo)
+1. Abra a ferramenta externa onde voce vai usar o carrossel
+2. Selecione as imagens da pasta "slides/" em sequencia (01.png, 02.png, etc.)
+3. Cole a legenda e hashtags (veja abaixo)
 
 Legenda:
 {carrossel.legenda or ""}
@@ -41,10 +40,9 @@ Legenda:
 Hashtags:
 {hashtags}
 
-5. Escolha data/horário de publicação
-6. Clique em "Agendar"
+4. Continue o fluxo manual na ferramenta escolhida
 
-Pronto! Seu carrossel ficara pronto para envio manual no calendario de conteudo.
+Pronto! Seu carrossel esta organizado para uso fora da plataforma.
 """
 
 

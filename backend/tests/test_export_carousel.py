@@ -55,7 +55,7 @@ def test_export_carousel_to_zip_contains_slides_metadata_and_readme(tmp_path):
         assert metadata["total_slides"] == 2
         assert metadata["slides"][0]["number"] == 1
         readme = archive.read("README.txt").decode("utf-8")
-        assert "Facebook Content Calendar" in readme
+        assert "arquivos exportados" in readme
         assert "Conheça o novo produto..." in readme
 
 

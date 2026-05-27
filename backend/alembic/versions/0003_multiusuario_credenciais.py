@@ -33,9 +33,6 @@ def upgrade() -> None:
     CREATE TABLE IF NOT EXISTS usuario_configuracao (
         usuario_id BIGINT PRIMARY KEY REFERENCES usuario(id) ON DELETE CASCADE,
         openai_api_key_encrypted TEXT,
-        instagram_access_token_encrypted TEXT,
-        instagram_user_id_encrypted TEXT,
-        facebook_page_id_encrypted TEXT,
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW()
     )

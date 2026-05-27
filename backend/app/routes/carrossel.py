@@ -106,8 +106,8 @@ def obter_carrossel(carrossel_id: int, db: Session = Depends(get_db), usuario: U
     return buscar_carrossel(db, carrossel_id, usuario)
 
 
-@router.get("/carrosseis/{carrossel_id}/exportar-calendar")
-def exportar_carrossel_calendar(carrossel_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
+@router.get("/carrosseis/{carrossel_id}/exportar")
+def exportar_carrossel(carrossel_id: int, db: Session = Depends(get_db), usuario: Usuario = Depends(get_current_user)):
     carrossel = buscar_carrossel(db, carrossel_id, usuario)
     try:
         zip_bytes = export_carousel_to_zip(db, carrossel, STORAGE_PATH)

@@ -122,7 +122,7 @@ def _prompt_usuario(carrossel: Carrossel) -> str:
     observacoes = _limitar_texto(observacoes, PROMPT_FIELD_LIMITS["observacoes_adicionais"]) or "nenhuma"
 
     return f"""
-Crie um roteiro de carrossel para Instagram com {carrossel.quantidade_slides or 7} slides.
+Crie um roteiro de carrossel para redes sociais com {carrossel.quantidade_slides or 7} slides.
 
 Dados da ideia:
 - Título atual: {titulo}
@@ -383,7 +383,7 @@ def gerar_carrossel_com_openai(db: Session, carrossel: Carrossel, *, api_key: st
                 model=OPENAI_MODEL,
                 instructions=(
                     "Você é um estrategista de conteúdo para Instagram. "
-                    "Gere roteiros de carrossel claros, revisáveis e prontos para aprovação humana. "
+                    "Gere roteiros de carrossel claros, revisaveis e prontos para edicao humana. "
                     "Use linguagem natural, objetiva e adequada ao público informado."
                 ),
                 input=_prompt_usuario(carrossel),

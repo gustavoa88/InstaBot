@@ -4,7 +4,6 @@ node_modules/
 logs/
 frontend/node_modules/
 dist/
-celerybeat-schedule
 build/
 alembic/
 __pycache__/
