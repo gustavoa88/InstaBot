@@ -15,15 +15,16 @@ function setAuthToken(token) {
 
 async function request(path, options = {}) {
   const authToken = getAuthToken();
+  const { rawResponse = false, ...fetchOptions } = options;
   const headers = {
     'Content-Type': 'application/json',
     ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-    ...(options.headers || {}),
+    ...(fetchOptions.headers || {}),
   };
 
   const response = await fetch(`${API_BASE}${path}`, {
     headers,
-    ...options,
+    ...fetchOptions,
   });
 
   if (!response.ok) {
@@ -40,6 +41,10 @@ async function request(path, options = {}) {
 
   if (response.status === 204) {
     return null;
+  }
+
+  if (rawResponse) {
+    return response;
   }
 
   return response.json();
@@ -77,5 +82,6 @@ export const api = {
   listAssets: (id) => request(`/carrosseis/${id}/assets`),
   deleteAsset: (id) => request(`/assets/${id}`, { method: 'DELETE' }),
   updateSlide: (id, payload) => json('PUT', `/slides/${id}`, payload),
+  downloadCarousel: (id) => request(`/carrosseis/${id}/exportar`, { rawResponse: true }),
   listLogs: () => request('/logs'),
 };

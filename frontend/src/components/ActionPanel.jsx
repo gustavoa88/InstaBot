@@ -1,4 +1,5 @@
-import { Image, ImagePlus, Play, RefreshCw, Trash2 } from 'lucide-react';
+import { Download, Image, ImagePlus, Play, RefreshCw, Trash2 } from 'lucide-react';
+import { api } from '../services/api.js';
 
 function resolveMediaUrl(url) {
   if (!url) return '';
@@ -35,7 +36,25 @@ export function ActionPanel({
   const activeAsset = [...(selected.assets || [])].filter((asset) => asset.status === 'ATIVO' && asset.tipo === 'background').sort((a, b) => b.id - a.id)[0];
   const canGenerate = !selected.slides?.length;
   const canRender = Boolean(selected.slides?.length);
+  const canDownload = Boolean(selected.slides?.some((slide) => slide.imagem_url));
   const normalizedColor = /^#[0-9A-Fa-f]{6}$/.test(renderForm.primary_color) ? renderForm.primary_color : '#6f9684';
+  const downloadSlides = async () => {
+    try {
+      const response = await api.downloadCarousel(selected.id);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'carousel_' + selected.id + '.zip';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      window.alert(error?.message || 'Não foi possível baixar os slides.');
+    }
+  };
+
 
   return (
     <aside className="panel rounded-md p-4">
@@ -134,6 +153,12 @@ export function ActionPanel({
             <Image className="h-4 w-4" />
             Renderizar slides
           </button>
+          {canDownload && (
+            <button className="secondary-button mt-2 w-full justify-start" onClick={downloadSlides} disabled={loading}>
+              <Download className="h-4 w-4" />
+              Download slides
+            </button>
+          )}
         </div>
       </section>
     </aside>
